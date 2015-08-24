@@ -7,6 +7,7 @@ require "yaml"
 ### Then RUN: "vagrant plugin install vagrant-openstack-provider"
 require 'vagrant-openstack-provider'
 
+$distro_type = ENV['DISTRO_TYPE'] || 'centos'
 $num_nodes = (ENV['NUM_NODES'] || 2).to_i
 ansible_tags = ENV['ANSIBLE_TAGS']
 
@@ -60,7 +61,21 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   end
 
   def set_vbox(vb, config)
-    config.vm.box = "chef/centos-7.0"
+    if $distro_type === "centos"
+      config.vm.box = "chef/centos-7.0"
+    end
+    if $distro_type === "fedora"
+      config.vm.box = "fedora/22"
+      config.vm.box_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/22/Cloud/x86_64/Images/Fedora-Cloud-Base-Vagrant-22-20150521.x86_64.vagrant-virtualbox.box"
+    end
+    if $distro_type === "centos-atomic"
+        config.vm.box = "cah-ds-test"
+        config.vm.box_url = "https://ci.centos.org/artifacts/sig-atomic/downstream/images/centos-atomic-host-7-vagrant-virtualbox.box"
+    end
+    if $distro_type === "fedora-atomic"
+      config.vm.box = "fedora-atomic"
+      config.vm.box_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/22/Cloud/x86_64/Images/Fedora-Cloud-Atomic-Vagrant-22-20150521.x86_64.vagrant-virtualbox.box"
+    end
     config.vm.network "private_network", type: "dhcp"
     vb.gui = false
     vb.memory = 2048
@@ -72,12 +87,22 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   end
 
   def set_libvirt(lv, config)
-#    config.vm.box = "kube-centos-7"
-#    config.vm.box_url = "http://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7.LibVirt.box"
-#    config.vm.box = "f22atomic"
-#    config.vm.box_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/22/Cloud/x86_64/Images/Fedora-Cloud-Atomic-Vagrant-22-20150521.x86_64.vagrant-libvirt.box"
-    config.vm.box = "cah-ds-test"
-    config.vm.box_url = "http://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7.LibVirt.box"
+    if $distro_type === "centos"
+      config.vm.box = "centos/7"
+      config.vm.box_url = "http://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7.LibVirt.box"
+    end
+    if $distro_type === "fedora"
+      config.vm.box = "fedora/22"
+      config.vm.box_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/22/Cloud/x86_64/Images/Fedora-Cloud-Base-Vagrant-22-20150521.x86_64.vagrant-libvirt.box"
+    end
+    if $distro_type === "centos-atomic"
+        config.vm.box = "cah-ds-test"
+        config.vm.box_url = "https://ci.centos.org/artifacts/sig-atomic/downstream/images/centos-atomic-host-7-vagrant-libvirt.box"
+    end
+    if $distro_type === "fedora-atomic"
+      config.vm.box = "fedora-atomic"
+      config.vm.box_url = "https://download.fedoraproject.org/pub/fedora/linux/releases/22/Cloud/x86_64/Images/Fedora-Cloud-Atomic-Vagrant-22-20150521.x86_64.vagrant-libvirt.box"
+    end
     lv.memory = 2048
     lv.cpus = 2
     lv.nested = true
