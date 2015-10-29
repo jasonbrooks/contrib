@@ -18,4 +18,4 @@
   when: s.stat.exists
 
 - include: fedora-dnf.yml
-  when: os_version.stdout|int >= 22 and 'Fedora' in distro.stdout and not is_atomic
+  when: os_version.stdout|int >= 22 and 'Fedora' in distro.stdout and is_atomic is not defined
