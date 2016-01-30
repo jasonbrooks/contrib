@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +42,7 @@ var (
 
 func stringPtr(val string) *string { return &val }
 func boolPtr(val bool) *bool       { return &val }
+func intPtr(val int) *int          { return &val }
 
 const noWhitelistUser = "UserNotInWhitelist"
 const whitelistUser = "WhitelistUser"
@@ -90,25 +93,25 @@ func DontRequireGithubE2EIssue() *github.Issue {
 
 func OldLGTMEvents() []github.IssueEvent {
 	return github_test.Events([]github_test.LabelTime{
-		{"lgtm", 6},
-		{"lgtm", 7},
-		{"lgtm", 8},
+		{"bob", "lgtm", 6},
+		{"bob", "lgtm", 7},
+		{"bob", "lgtm", 8},
 	})
 }
 
 func NewLGTMEvents() []github.IssueEvent {
 	return github_test.Events([]github_test.LabelTime{
-		{"lgtm", 10},
-		{"lgtm", 11},
-		{"lgtm", 12},
+		{"bob", "lgtm", 10},
+		{"bob", "lgtm", 11},
+		{"bob", "lgtm", 12},
 	})
 }
 
 func OverlappingLGTMEvents() []github.IssueEvent {
 	return github_test.Events([]github_test.LabelTime{
-		{"lgtm", 8},
-		{"lgtm", 9},
-		{"lgtm", 10},
+		{"bob", "lgtm", 8},
+		{"bob", "lgtm", 9},
+		{"bob", "lgtm", 10},
 	})
 }
 
@@ -119,19 +122,11 @@ func Commits() []github.RepositoryCommit {
 }
 
 func SuccessStatus() *github.CombinedStatus {
-	return github_test.Status("mysha", []string{claContext, shippableContext, travisContext, jenkinsCIContext, gceE2EContext}, nil, nil, nil)
-}
-
-func JenkinsCIGreenShippablePendingStatus() *github.CombinedStatus {
-	return github_test.Status("mysha", []string{claContext, jenkinsCIContext, travisContext, gceE2EContext}, nil, []string{shippableContext}, nil)
-}
-
-func ShippableGreenStatus() *github.CombinedStatus {
-	return github_test.Status("mysha", []string{claContext, shippableContext, travisContext, gceE2EContext}, nil, nil, nil)
+	return github_test.Status("mysha", []string{travisContext, jenkinsUnitContext, jenkinsE2EContext}, nil, nil, nil)
 }
 
 func GithubE2EFailStatus() *github.CombinedStatus {
-	return github_test.Status("mysha", []string{claContext, shippableContext, travisContext}, []string{gceE2EContext}, nil, nil)
+	return github_test.Status("mysha", []string{travisContext, jenkinsUnitContext}, []string{jenkinsE2EContext}, nil, nil)
 }
 
 func SuccessJenkins() jenkins.Job {
@@ -143,6 +138,122 @@ func SuccessJenkins() jenkins.Job {
 func FailJenkins() jenkins.Job {
 	return jenkins.Job{
 		Result: "FAILED",
+	}
+}
+
+func getTestSQ(startThreads bool, config *github_util.Config, server *httptest.Server) *SubmitQueue {
+	sq := new(SubmitQueue)
+	sq.RequiredStatusContexts = []string{jenkinsUnitContext}
+	sq.E2EStatusContext = jenkinsE2EContext
+	sq.UnitStatusContext = jenkinsUnitContext
+	sq.JenkinsHost = server.URL
+	sq.JenkinsJobs = []string{"foo"}
+	sq.WhitelistOverride = "ok-to-merge"
+	sq.githubE2EQueue = map[int]*github_util.MungeObject{}
+	if startThreads {
+		sq.Initialize(config)
+		sq.EachLoop()
+		sq.userWhitelist.Insert(whitelistUser)
+	}
+	return sq
+}
+
+func TestQueueOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		issues   []github.Issue
+		expected []int
+	}{
+		{
+			name: "Just prNum",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, nil, true),
+				*github_test.Issue(whitelistUser, 3, nil, true),
+				*github_test.Issue(whitelistUser, 4, nil, true),
+				*github_test.Issue(whitelistUser, 5, nil, true),
+			},
+			expected: []int{2, 3, 4, 5},
+		},
+		{
+			name: "With a priority label",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, []string{"priority/P1"}, true),
+				*github_test.Issue(whitelistUser, 3, []string{"priority/P1"}, true),
+				*github_test.Issue(whitelistUser, 4, []string{"priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 5, nil, true),
+			},
+			expected: []int{4, 2, 3, 5},
+		},
+		{
+			name: "With two priority labels",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, []string{"priority/P1", "priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 3, []string{"priority/P1"}, true),
+				*github_test.Issue(whitelistUser, 4, []string{"priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 5, nil, true),
+			},
+			expected: []int{2, 4, 3, 5},
+		},
+		{
+			name: "With unrelated labels",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, []string{"priority/P1", "priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 3, []string{"priority/P1", "kind/design"}, true),
+				*github_test.Issue(whitelistUser, 4, []string{"priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 5, []string{"LGTM", "kind/new-api"}, true),
+			},
+			expected: []int{2, 4, 3, 5},
+		},
+		{
+			name: "With invalid priority label",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, []string{"priority/P1", "priority/P0"}, true),
+				*github_test.Issue(whitelistUser, 3, []string{"priority/P1", "kind/design", "priority/high"}, true),
+				*github_test.Issue(whitelistUser, 4, []string{"priority/P0", "priorty/bob"}, true),
+				*github_test.Issue(whitelistUser, 5, nil, true),
+			},
+			expected: []int{2, 4, 3, 5},
+		},
+		{
+			name: "Unlabeled counts as P3",
+			issues: []github.Issue{
+				*github_test.Issue(whitelistUser, 2, nil, true),
+				*github_test.Issue(whitelistUser, 3, []string{"priority/P3"}, true),
+				*github_test.Issue(whitelistUser, 4, []string{"priority/P2"}, true),
+				*github_test.Issue(whitelistUser, 5, nil, true),
+			},
+			expected: []int{4, 2, 3, 5},
+		},
+	}
+	for testNum, test := range tests {
+		config := &github_util.Config{}
+		client, server, mux := github_test.InitServer(t, nil, nil, nil, nil, nil)
+		config.Org = "o"
+		config.Project = "r"
+		config.SetClient(client)
+		sq := getTestSQ(false, config, server)
+		for i := range test.issues {
+			issue := &test.issues[i]
+			github_test.ServeIssue(t, mux, issue)
+
+			issueNum := *issue.Number
+			obj, err := config.GetObject(issueNum)
+			if err != nil {
+				t.Fatalf("%d:%q unable to get issue: %v", testNum, test.name, err)
+			}
+			sq.githubE2EQueue[issueNum] = obj
+		}
+		actual := sq.orderedE2EQueue()
+		if len(actual) != len(test.expected) {
+			t.Fatalf("%d:%q len(actual):%v != len(expected):%v", testNum, test.name, actual, test.expected)
+		}
+		for i, a := range actual {
+			e := test.expected[i]
+			if a != e {
+				t.Errorf("%d:%q a[%d]:%d != e[%d]:%d", testNum, test.name, i, a, i, e)
+			}
+		}
+		server.Close()
 	}
 }
 
@@ -201,70 +312,92 @@ func TestValidateLGTMAfterPush(t *testing.T) {
 	}
 }
 
-// fakeRunGithubE2ESuccess imitates the github e2e running, but indicates
-// success after a short sleep
-func fakeRunGithubE2ESuccess(ciStatus *github.CombinedStatus, shouldPass bool) {
+func setStatus(status *github.RepoStatus, success bool) {
+	if success {
+		status.State = stringPtr("success")
+	} else {
+		status.State = stringPtr("failure")
+	}
+}
+
+func addStatus(context string, success bool, ciStatus *github.CombinedStatus) {
+	status := github.RepoStatus{
+		Context: stringPtr(context),
+	}
+	setStatus(&status, success)
+	ciStatus.Statuses = append(ciStatus.Statuses, status)
+}
+
+// fakeRunGithubE2ESuccess imitates jenkins running
+func fakeRunGithubE2ESuccess(ciStatus *github.CombinedStatus, e2ePass, unitPass bool) {
 	ciStatus.State = stringPtr("pending")
 	for id := range ciStatus.Statuses {
 		status := &ciStatus.Statuses[id]
-		if *status.Context == gceE2EContext {
+		if *status.Context == jenkinsE2EContext || *status.Context == jenkinsUnitContext {
 			status.State = stringPtr("pending")
-			break
 		}
 	}
 	// short sleep like the test is running
 	time.Sleep(500 * time.Millisecond)
-	ciStatus.State = stringPtr("success")
-	found := false
+	if e2ePass && unitPass {
+		ciStatus.State = stringPtr("success")
+	}
+	foundE2E := false
+	foundUnit := false
 	for id := range ciStatus.Statuses {
 		status := &ciStatus.Statuses[id]
-		if *status.Context == gceE2EContext {
-			if shouldPass {
-				status.State = stringPtr("success")
-			} else {
-				status.State = stringPtr("failure")
-			}
-			found = true
-			break
+		if *status.Context == jenkinsE2EContext {
+			setStatus(status, e2ePass)
+			foundE2E = true
+		}
+		if *status.Context == jenkinsUnitContext {
+			setStatus(status, unitPass)
+			foundUnit = true
 		}
 	}
-	if !found {
-		e2eStatus := github.RepoStatus{
-			Context: stringPtr(gceE2EContext),
-			State:   stringPtr("success"),
-		}
-		ciStatus.Statuses = append(ciStatus.Statuses, e2eStatus)
+	if !foundE2E {
+		addStatus(jenkinsE2EContext, e2ePass, ciStatus)
+	}
+	if !foundUnit {
+		addStatus(jenkinsUnitContext, unitPass, ciStatus)
 	}
 }
 
-func TestMunge(t *testing.T) {
+func TestSubmitQueue(t *testing.T) {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	tests := []struct {
+		name             string // because when the fail, counting is hard
 		pr               *github.PullRequest
 		issue            *github.Issue
 		commits          []github.RepositoryCommit
 		events           []github.IssueEvent
 		ciStatus         *github.CombinedStatus
 		jenkinsJob       jenkins.Job
-		shouldPass       bool
+		e2ePass          bool
+		unitPass         bool
 		mergeAfterQueued bool
-		reasons          []string
+		reason           string
+		state            string // what the github status context should be for the PR HEAD
 	}{
 		// Should pass because the entire thing was run and good
 		{
+			name:       "Test1",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			ciStatus:   SuccessStatus(),
 			jenkinsJob: SuccessJenkins(),
-			shouldPass: true,
-			reasons:    []string{merged},
+			e2ePass:    true,
+			unitPass:   true,
+			reason:     merged,
+			state:      "success",
 		},
 		// Should list as 'merged' but the merge should happen before it gets e2e tested
 		// and we should bail early instead of waiting for a test that will never come.
 		{
+			name:       "Test2",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			events:     NewLGTMEvents(),
@@ -272,151 +405,190 @@ func TestMunge(t *testing.T) {
 			ciStatus:   SuccessStatus(),
 			jenkinsJob: SuccessJenkins(),
 			// The test should never run, but if it does, make sure it fails
-			shouldPass:       false,
 			mergeAfterQueued: true,
-			reasons:          []string{merged},
+			reason:           merged,
+			state:            "success",
 		},
 		// Should merge even though github ci failed because of dont-require-e2e
 		{
+			name:       "Test3",
 			pr:         ValidPR(),
 			issue:      DontRequireGithubE2EIssue(),
 			ciStatus:   GithubE2EFailStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			jenkinsJob: SuccessJenkins(),
-			reasons:    []string{merged},
+			reason:     merged,
+			state:      "success",
 		},
 		// Should merge even though user not in whitelist because has ok-to-merge
 		{
+			name:       "Test4",
 			pr:         ValidPR(),
 			issue:      UserNotInWhitelistOKToMergeIssue(),
 			ciStatus:   SuccessStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			jenkinsJob: SuccessJenkins(),
-			shouldPass: true,
-			reasons:    []string{merged},
+			e2ePass:    true,
+			unitPass:   true,
+			reason:     merged,
+			state:      "success",
 		},
 		// Fail because PR can't automatically merge
 		{
-			pr:      UnMergeablePR(),
-			issue:   NoOKToMergeIssue(),
-			reasons: []string{unmergeable},
+			name:   "Test5",
+			pr:     UnMergeablePR(),
+			issue:  NoOKToMergeIssue(),
+			reason: unmergeable,
+			state:  "pending",
 		},
 		// Fail because we don't know if PR can automatically merge
 		{
-			pr:      UndeterminedMergeablePR(),
-			issue:   NoOKToMergeIssue(),
-			reasons: []string{undeterminedMergability},
+			name:   "Test6",
+			pr:     UndeterminedMergeablePR(),
+			issue:  NoOKToMergeIssue(),
+			reason: undeterminedMergability,
+			state:  "pending",
 		},
 		// Fail because the "cla: yes" label was not applied
 		{
-			pr:      ValidPR(),
-			issue:   NoCLAIssue(),
-			reasons: []string{noCLA},
+			name:   "Test7",
+			pr:     ValidPR(),
+			issue:  NoCLAIssue(),
+			reason: noCLA,
+			state:  "pending",
 		},
 		// Fail because github CI tests have failed (or at least are not success)
 		{
-			pr:      NonWhitelistUserPR(),
-			issue:   NoOKToMergeIssue(),
-			reasons: []string{ciFailure},
+			name:   "Test8",
+			pr:     NonWhitelistUserPR(),
+			issue:  NoOKToMergeIssue(),
+			reason: ciFailure,
+			state:  "pending",
 		},
 		// Fail because the user is not in the whitelist and we don't have "ok-to-merge"
 		{
+			name:     "Test9",
 			pr:       ValidPR(),
 			issue:    UserNotInWhitelistNoOKToMergeIssue(),
 			ciStatus: SuccessStatus(),
-			reasons:  []string{needsok},
+			reason:   needsok,
+			state:    "pending",
 		},
 		// Fail because missing LGTM label
 		{
+			name:     "Test10",
 			pr:       ValidPR(),
 			issue:    NoLGTMIssue(),
 			ciStatus: SuccessStatus(),
-			reasons:  []string{noLGTM},
+			reason:   noLGTM,
+			state:    "pending",
 		},
 		// Fail because we can't tell if LGTM was added before the last change
 		{
+			name:     "Test11",
 			pr:       ValidPR(),
 			issue:    NoOKToMergeIssue(),
 			ciStatus: SuccessStatus(),
-			reasons:  []string{unknown},
+			reason:   unknown,
+			state:    "failure",
 		},
 		// Fail because LGTM was added before the last change
 		{
+			name:     "Test12",
 			pr:       ValidPR(),
 			issue:    NoOKToMergeIssue(),
 			ciStatus: SuccessStatus(),
 			events:   OldLGTMEvents(),
 			commits:  Commits(), // Modified at time.Unix(7), 8, and 9
-			reasons:  []string{lgtmEarly},
+			reason:   lgtmEarly,
+			state:    "pending",
 		},
 		// Fail because jenkins instances are failing (whole submit queue blocks)
 		{
+			name:       "Test13",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			ciStatus:   SuccessStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			jenkinsJob: FailJenkins(),
-			reasons:    []string{e2eFailure},
+			reason:     e2eFailure,
+			state:      "success",
 		},
 		// Fail because the second run of github e2e tests failed
 		{
+			name:       "Test14",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			ciStatus:   SuccessStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(),
 			jenkinsJob: SuccessJenkins(),
-			reasons:    []string{ghE2EFailed},
-		},
-		// Should pass because the jenkins ci is green even tho shippable is pending.
-		{
-			pr:         ValidPR(),
-			issue:      NoOKToMergeIssue(),
-			events:     NewLGTMEvents(),
-			commits:    Commits(),
-			ciStatus:   JenkinsCIGreenShippablePendingStatus(),
-			jenkinsJob: SuccessJenkins(),
-			shouldPass: true,
-			reasons:    []string{merged},
-		},
-		// Should pass because the shippable is green (no jenkins ci).
-		{
-			pr:         ValidPR(),
-			issue:      NoOKToMergeIssue(),
-			events:     NewLGTMEvents(),
-			commits:    Commits(),
-			ciStatus:   ShippableGreenStatus(),
-			jenkinsJob: SuccessJenkins(),
-			shouldPass: true,
-			reasons:    []string{merged},
+			reason:     ghE2EFailed,
+			state:      "pending",
 		},
 		// When we check the reason it may be queued or it may already have failed.
 		{
+			name:       "Test15",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			ciStatus:   SuccessStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			jenkinsJob: SuccessJenkins(),
-			shouldPass: false,
-			reasons:    []string{ghE2EQueued, ghE2EFailed},
+			reason:     ghE2EQueued,
+			// The state is unpredictable. When it goes on the queue it is success.
+			// When it fails the build it is pending. So state depends on how far along
+			// this were when we checked. Thus just don't check it...
+			state: "",
 		},
 		// Fail because the second run of github e2e tests failed
 		{
+			name:       "Test16",
 			pr:         ValidPR(),
 			issue:      NoOKToMergeIssue(),
 			ciStatus:   SuccessStatus(),
 			events:     NewLGTMEvents(),
 			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
 			jenkinsJob: SuccessJenkins(),
-			shouldPass: false,
-			reasons:    []string{ghE2EFailed},
+			reason:     ghE2EFailed,
+			state:      "pending",
+		},
+		{
+			name:       "Fail because E2E pass, but unit test fail",
+			pr:         ValidPR(),
+			issue:      NoOKToMergeIssue(),
+			events:     NewLGTMEvents(),
+			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
+			ciStatus:   SuccessStatus(),
+			jenkinsJob: SuccessJenkins(),
+			e2ePass:    true,
+			unitPass:   false,
+			reason:     ghE2EFailed,
+			state:      "pending",
+		},
+		{
+			name:       "Fail because E2E fail, but unit test pass",
+			pr:         ValidPR(),
+			issue:      NoOKToMergeIssue(),
+			events:     NewLGTMEvents(),
+			commits:    Commits(), // Modified at time.Unix(7), 8, and 9
+			ciStatus:   SuccessStatus(),
+			jenkinsJob: SuccessJenkins(),
+			e2ePass:    false,
+			unitPass:   true,
+			reason:     ghE2EFailed,
+			state:      "pending",
 		},
 	}
-	for testNum, test := range tests {
+	for testNum := range tests {
+		test := &tests[testNum]
+		issueNum := testNum + 1
+		issueNumStr := strconv.Itoa(issueNum)
+
+		test.issue.Number = &issueNum
 		client, server, mux := github_test.InitServer(t, test.issue, test.pr, test.events, test.commits, test.ciStatus)
 
 		config := &github_util.Config{}
@@ -426,6 +598,8 @@ func TestMunge(t *testing.T) {
 		// Don't wait so long for it to go pending or back
 		d := 250 * time.Millisecond
 		config.PendingWaitTime = &d
+
+		stateSet := ""
 
 		numJenkinsCalls := 0
 		// Respond with success to jenkins requests.
@@ -452,11 +626,11 @@ func TestMunge(t *testing.T) {
 				test.pr.Mergeable = nil
 			}
 		})
-		mux.HandleFunc("/repos/o/r/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
+		path := fmt.Sprintf("/repos/o/r/issues/%d/comments", issueNum)
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("Unexpected method: %s", r.Method)
 			}
-
 			type comment struct {
 				Body string `json:"body"`
 			}
@@ -464,7 +638,7 @@ func TestMunge(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(c)
 			msg := c.Body
 			if strings.HasPrefix(msg, "@k8s-bot test this") {
-				go fakeRunGithubE2ESuccess(test.ciStatus, test.shouldPass)
+				go fakeRunGithubE2ESuccess(test.ciStatus, test.e2ePass, test.unitPass)
 			}
 			w.WriteHeader(http.StatusOK)
 			data, err := json.Marshal(github.IssueComment{})
@@ -473,7 +647,8 @@ func TestMunge(t *testing.T) {
 			}
 			w.Write(data)
 		})
-		mux.HandleFunc("/repos/o/r/pulls/1/merge", func(w http.ResponseWriter, r *http.Request) {
+		path = fmt.Sprintf("/repos/o/r/pulls/%d/merge", issueNum)
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "PUT" {
 				t.Errorf("Unexpected method: %s", r.Method)
 			}
@@ -485,29 +660,55 @@ func TestMunge(t *testing.T) {
 			w.Write(data)
 			test.pr.Merged = boolPtr(true)
 		})
+		path = fmt.Sprintf("/repos/o/r/statuses/%s", *test.pr.Head.SHA)
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != "POST" {
+				t.Errorf("Unexpected method: %s", r.Method)
+			}
+			decoder := json.NewDecoder(r.Body)
+			var status github.RepoStatus
+			err := decoder.Decode(&status)
+			if err != nil {
+				t.Errorf("Unable to decode status: %v", err)
+			}
 
-		sq := SubmitQueue{}
-		sq.RequiredStatusContexts = []string{claContext}
-		sq.DontRequireE2ELabel = "e2e-not-required"
-		sq.E2EStatusContext = gceE2EContext
-		sq.JenkinsHost = server.URL
-		sq.JenkinsJobs = []string{"foo"}
-		sq.WhitelistOverride = "ok-to-merge"
-		sq.Initialize(config)
-		sq.EachLoop()
-		sq.userWhitelist.Insert(whitelistUser)
+			stateSet = *status.State
+
+			data, err := json.Marshal(status)
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+		})
+
+		sq := getTestSQ(true, config, server)
 
 		obj := github_util.TestObject(config, test.issue, test.pr, test.commits, test.events)
 		sq.Munge(obj)
 		done := make(chan bool, 1)
 		go func(done chan bool) {
 			for {
-				reason := sq.prStatus["1"].Reason
-				for _, r := range test.reasons {
-					if r == reason {
-						done <- true
-						return
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("%d:%q panic'd likely writing to 'done' channel", testNum, test.name)
 					}
+				}()
+
+				if sq.prStatus[issueNumStr].Reason == test.reason {
+					done <- true
+					return
+				}
+				found := false
+				for _, status := range sq.statusHistory {
+					if status.Number == issueNum && status.Reason == test.reason {
+						found = true
+						break
+					}
+				}
+				if found {
+					done <- true
+					return
 				}
 				time.Sleep(1 * time.Millisecond)
 			}
@@ -515,8 +716,13 @@ func TestMunge(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("test:%d timed out waiting expected reason=%v but got %q", testNum, test.reasons, sq.prStatus["1"].Reason)
+			t.Errorf("%d:%q timed out waiting expected reason=%q but got prStatus:%q history:%v", testNum, test.name, test.reason, sq.prStatus[issueNumStr].Reason, sq.statusHistory)
 		}
+		close(done)
 		server.Close()
+
+		if test.state != "" && test.state != stateSet {
+			t.Errorf("%d:%q state set to %q but expected %q", testNum, test.name, stateSet, test.state)
+		}
 	}
 }

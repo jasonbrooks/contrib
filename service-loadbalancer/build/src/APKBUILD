@@ -14,7 +14,7 @@
 
 pkgname=haproxy
 pkgver=1.6
-pkgrel=0
+pkgrel=3
 pkgdesc="HAProxy is a free, very fast and reliable solution offering high availability, load balancing"
 url="http://www.haproxy.org/"
 arch="x86_64"
@@ -26,7 +26,7 @@ source="http://www.haproxy.org/download/1.6/src/$pkgfullname.tar.gz"
 
 build() {
 	cd "$srcdir/$pkgfullname"
-	make TARGET=linux2628 USE_PCRE=1 USE_PCRE_JIT=1 USE_OPENSSL=1 USE_LUA=1 LUA_LIB=/usr/lib/lua5.3/ LUA_INC=/usr/include/lua5.3 CFLAGS="$CFLAGS" || return 1
+	make TARGET=linux2628 USE_PCRE=1 USE_PCRE_JIT=1 USE_OPENSSL=1 USE_LUA=1 CPU=x86_64 USE_LINUX_TPROXY=1 LUA_LIB=/usr/lib/lua5.3/ LUA_INC=/usr/include/lua5.3 CFLAGS="$CFLAGS" || return 1
 }
 
 package() {
@@ -36,6 +36,6 @@ package() {
 	install -d "$pkgdir"/var/lib/haproxy
 }
 
-md5sums="2361c7dd0a709a1b235215225875f34c  haproxy-1.6.0.tar.gz"
-sha256sums="e83a272b7d3638cf1d37bba58d3e75f497c1862315ee5bb7f5efc1d98d26e25b  haproxy-1.6.0.tar.gz"
-sha512sums="44bfcd040c87e0c3e7d925bb671009e8ed568a7a32ae32ac5d58921417aaa458b772a1368876fee8bf9252106fb315c1c3d29b7f03739a239567b86fb3c25e8e  haproxy-1.6.0.tar.gz"
+md5sums="3362d1e268c78155c2474cb73e7f03f9  haproxy-1.6.3.tar.gz"
+sha256sums="fd06b45054cde2c69cb3322dfdd8a4bcfc46eb9d0c4b36d20d3ea19d84e338a7  haproxy-1.6.3.tar.gz"
+sha512sums="79ed526cd857dcd68d9b8289df4d4a2d87594e8d0d119f4d7c618597db7563a0cedc8417ddcfefb464a322d1fb50cb044656a2fbe78867f58052e0ddaa894bb9  haproxy-1.6.3.tar.gz"

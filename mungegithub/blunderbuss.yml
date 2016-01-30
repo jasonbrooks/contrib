@@ -7,6 +7,7 @@ prefixMap:
     - thockin
 
   build:
+    - ihmccreery
     - ixdy
     - lavalamp
     - zmerlynn
@@ -15,6 +16,7 @@ prefixMap:
     - brendandburns
     - davidopp
     - eparis
+    - mikedanese
     - roberthbailey
     - zmerlynn
 
@@ -25,21 +27,30 @@ prefixMap:
   cluster/mesos/docker:
     - karlkfi
 
+  cluster/vagrant:
+    - derekwaynecarr
+
   cmd:
     - brendandburns
     - davidopp
     - dchen1107
     - lavalamp
+    - mikedanese
     - thockin
 
   cmd/kube-controller-manager:
     - davidopp
     - lavalamp
+    - mikedanese
 
   cmd/kubelet:
     - dchen1107
     - vishh
     - yujuhong
+
+  cmd/libs/go2idl:
+    - lavalamp
+    - wojtek-t
 
   contrib/mesos:
     - jdef
@@ -63,8 +74,10 @@ prefixMap:
 
   hack:
     - eparis
+    - ihmccreery
     - ixdy
     - lavalamp
+    - spxtr
     - zmerlynn
 
   # fall through for things that miss everything else
@@ -72,6 +85,7 @@ prefixMap:
     - bgrant0607
     - brendandburns
     - eparis
+    - lavalamp
     - smarterclayton
     - thockin
 
@@ -89,51 +103,60 @@ prefixMap:
     - smarterclayton
     - thockin
 
-  pkg/apiserver:
-    - lavalamp
-    - smarterclayton
-
-  pkg/authentication:
-    - erictune
-    - liggitt
-
-  pkg/client:
-    - deads2k
-    - lavalamp
-    - smarterclayton
-
-  pkg/clientauth:
-    - lavalamp
-
-  pkg/cloudprovider:
-    - davidopp
-
-  pkg/cloudprovider/aws:
-    - justinsb
-
-  pkg/controller:
-    - davidopp
-    - derekwaynecarr
-
-  pkg/conversion:
-    - derekwaynecarr
-    - lavalamp
-
-  pkg/credentialprovider:
-    - erictune
-    - liggitt
-
-  pkg/exapi:
+  pkg/apis:
     - bgrant0607
     - erictune
     - lavalamp
     - smarterclayton
     - thockin
 
+  pkg/apiserver:
+    - lavalamp
+    - nikhiljindal
+    - smarterclayton
+
+  pkg/auth:
+    - erictune
+    - liggitt
+
+  pkg/client:
+    - caesarxuchao
+    - deads2k
+    - krousey
+    - lavalamp
+    - smarterclayton
+
+  pkg/client/leaderelection:
+    - mikedanese
+
+  pkg/cloudprovider:
+    - davidopp
+    - mikedanese
+
+  pkg/cloudprovider/aws:
+    - justinsb
+
+  pkg/controller:
+    - bprashanth
+    - davidopp
+    - derekwaynecarr
+    - mikedanese
+
+  pkg/conversion:
+    - derekwaynecarr
+    - lavalamp
+    - smarterclayton
+    - wojtek-t
+
+  pkg/credentialprovider:
+    - erictune
+    - liggitt
+
   pkg/kubectl:
     - bgrant0607
     - brendandburns
     - deads2k
+    - janetkuo
     - jlowdermilk
     - smarterclayton
 
@@ -146,6 +169,8 @@ prefixMap:
     - davidopp
     - derekwaynecarr
     - lavalamp
+    - mikedanese
+    - nikhiljindal
 
   pkg/proxy:
     - ArtfulCoder
@@ -154,6 +179,7 @@ prefixMap:
   pkg/registry:
     - lavalamp
     - smarterclayton
+    - wojtek-t
 
   pkg/volume:
     - saad-ali
@@ -179,5 +205,9 @@ prefixMap:
   plugin/pkg/scheduler:
     - davidopp
 
+  release:
+    - ihmccreery
+
   test:
+    - ihmccreery
     - ixdy

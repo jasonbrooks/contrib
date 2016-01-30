@@ -21,7 +21,9 @@ import (
 	goflag "flag"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -41,6 +43,9 @@ const (
 	maxInt          = int(^uint(0) >> 1)
 	tokenLimit      = 500 // How many github api tokens to not use
 	asyncTokenLimit = 400 // How many github api tokens to not use for 'asyc' calls
+
+	headerRateRemaining = "X-RateLimit-Remaining"
+	headerRateReset     = "X-RateLimit-Reset"
 )
 
 type callLimitRoundTripper struct {
@@ -60,7 +65,11 @@ func (c *callLimitRoundTripper) getTokenExcept(remaining int) {
 	resetTime := c.resetTime
 	c.Unlock()
 	sleepTime := resetTime.Sub(time.Now()) + (1 * time.Minute)
-	glog.Errorf("Ran out of github API tokens. Sleeping for %v minutes", sleepTime.Minutes())
+	if sleepTime > 0 {
+		glog.Errorf("*****************")
+		glog.Errorf("Ran out of github API tokens. Sleeping for %v minutes", sleepTime.Minutes())
+		glog.Errorf("*****************")
+	}
 	// negative duration is fine, it means we are past the github api reset and we won't sleep
 	time.Sleep(sleepTime)
 }
@@ -73,12 +82,6 @@ func (c *callLimitRoundTripper) getAsyncToken() {
 	c.getTokenExcept(asyncTokenLimit)
 }
 
-func (c *callLimitRoundTripper) putToken() {
-	c.Lock()
-	defer c.Unlock()
-	c.remaining++
-}
-
 func (c *callLimitRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c.delegate == nil {
 		c.delegate = http.DefaultTransport
@@ -86,8 +89,17 @@ func (c *callLimitRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	// TODO Be smart about which should use getToken and which should use getAsyncToken()
 	c.getToken()
 	resp, err := c.delegate.RoundTrip(req)
-	if resp != nil && resp.Header.Get(httpcache.XFromCache) != "" {
-		c.putToken()
+	c.Lock()
+	defer c.Unlock()
+	if resp != nil {
+		if remaining := resp.Header.Get(headerRateRemaining); remaining != "" {
+			c.remaining, _ = strconv.Atoi(remaining)
+		}
+		if reset := resp.Header.Get(headerRateReset); reset != "" {
+			if v, _ := strconv.ParseInt(reset, 10, 64); v != 0 {
+				c.resetTime = time.Unix(v, 0)
+			}
+		}
 	}
 	return resp, err
 }
@@ -162,8 +174,6 @@ type analytics struct {
 	apiCount           int       // number of times we called a github API
 	cachedAPICount     int       // how many api calls were answered by the local cache
 	apiPerSec          float64
-	limitRemaining     int
-	limitResetTime     time.Time
 
 	AddLabels         analytic
 	RemoveLabels      analytic
@@ -174,12 +184,15 @@ type analytics struct {
 	ListCommits       analytic
 	GetCommit         analytic
 	GetCombinedStatus analytic
+	SetStatus         analytic
 	GetPR             analytic
 	AssignPR          analytic
 	ClosePR           analytic
 	OpenPR            analytic
 	GetContents       analytic
+	ListComments      analytic
 	CreateComment     analytic
+	DeleteComment     analytic
 	Merge             analytic
 	GetUser           analytic
 }
@@ -199,12 +212,15 @@ func (a analytics) print() {
 	fmt.Fprintf(w, "ListCommits\t%d\t\n", a.ListCommits.Count)
 	fmt.Fprintf(w, "GetCommit\t%d\t\n", a.GetCommit.Count)
 	fmt.Fprintf(w, "GetCombinedStatus\t%d\t\n", a.GetCombinedStatus.Count)
+	fmt.Fprintf(w, "SetStatus\t%d\t\n", a.SetStatus.Count)
 	fmt.Fprintf(w, "GetPR\t%d\t\n", a.GetPR.Count)
 	fmt.Fprintf(w, "AssignPR\t%d\t\n", a.AssignPR.Count)
 	fmt.Fprintf(w, "ClosePR\t%d\t\n", a.ClosePR.Count)
 	fmt.Fprintf(w, "OpenPR\t%d\t\n", a.OpenPR.Count)
 	fmt.Fprintf(w, "GetContents\t%d\t\n", a.GetContents.Count)
+	fmt.Fprintf(w, "ListComments\t%d\t\n", a.ListComments.Count)
 	fmt.Fprintf(w, "CreateComment\t%d\t\n", a.CreateComment.Count)
+	fmt.Fprintf(w, "DeleteComment\t%d\t\n", a.DeleteComment.Count)
 	fmt.Fprintf(w, "Merge\t%d\t\n", a.Merge.Count)
 	fmt.Fprintf(w, "GetUser\t%d\t\n", a.GetUser.Count)
 	w.Flush()
@@ -330,9 +346,11 @@ func (config *Config) GetDebugStats() DebugStats {
 		APICount:       config.lastAnalytics.apiCount,
 		CachedAPICount: config.lastAnalytics.cachedAPICount,
 		NextLoopTime:   config.lastAnalytics.nextAnalyticUpdate,
-		LimitRemaining: config.lastAnalytics.limitRemaining,
-		LimitResetTime: config.lastAnalytics.limitResetTime,
 	}
+	config.apiLimit.Lock()
+	defer config.apiLimit.Unlock()
+	d.LimitRemaining = config.apiLimit.remaining
+	d.LimitResetTime = config.apiLimit.resetTime
 	return d
 }
 
@@ -340,25 +358,6 @@ func (config *Config) GetDebugStats() DebugStats {
 // mungers are likely to run again.
 func (config *Config) NextExpectedUpdate(t time.Time) {
 	config.analytics.nextAnalyticUpdate = t
-}
-
-func (config *Config) handleCallLimitReset() {
-	limits, _, err := config.client.RateLimits()
-	if err != nil {
-		glog.Errorf("Unable to get RateLimits: %v", err)
-		return
-	}
-
-	remaining := limits.Core.Remaining
-	resetTime := limits.Core.Reset.Time
-
-	config.lastAnalytics.limitRemaining = remaining
-	config.lastAnalytics.limitResetTime = resetTime
-
-	config.apiLimit.Lock()
-	config.apiLimit.remaining = remaining
-	config.apiLimit.resetTime = resetTime
-	config.apiLimit.Unlock()
 }
 
 // ResetAPICount will both reset the counters of how many api calls have been
@@ -371,7 +370,6 @@ func (config *Config) ResetAPICount() {
 
 	config.analytics = analytics{}
 	config.analytics.lastAPIReset = time.Now()
-	config.handleCallLimitReset()
 }
 
 // SetClient should ONLY be used by testing. Normal commands should use PreExecute()
@@ -414,22 +412,42 @@ func (obj *MungeObject) LastModifiedTime() *time.Time {
 	return lastModified
 }
 
-// LabelTime returns the last time the request label was added to an issue.
-// If the label was never added you will get the 0 time.
-func (obj *MungeObject) LabelTime(label string) *time.Time {
+// labelEvent returns the most recent event where the given label was added to an issue
+func (obj *MungeObject) labelEvent(label string) *github.IssueEvent {
 	var labelTime *time.Time
+	var out github.IssueEvent
 	events, err := obj.GetEvents()
 	if err != nil {
-		return labelTime
+		return &out
 	}
 	for _, event := range events {
 		if *event.Event == "labeled" && *event.Label.Name == label {
 			if labelTime == nil || event.CreatedAt.After(*labelTime) {
 				labelTime = event.CreatedAt
+				out = event
 			}
 		}
 	}
-	return labelTime
+	return &out
+}
+
+// LabelTime returns the last time the request label was added to an issue.
+// If the label was never added you will get the 0 time.
+func (obj *MungeObject) LabelTime(label string) *time.Time {
+	event := obj.labelEvent(label)
+	if event == nil {
+		return nil
+	}
+	return event.CreatedAt
+}
+
+// LabelCreator returns the login name of the user who (last) created the given label
+func (obj *MungeObject) LabelCreator(label string) string {
+	event := obj.labelEvent(label)
+	if event == nil {
+		return ""
+	}
+	return *event.Actor.Login
 }
 
 // HasLabel returns if the label `name` is in the array of `labels`
@@ -452,6 +470,16 @@ func (obj *MungeObject) HasLabels(names []string) bool {
 		}
 	}
 	return true
+}
+
+// LabelSet returns the name of all of he labels applied to the object as a
+// kubernetes string set.
+func (obj *MungeObject) LabelSet() sets.String {
+	out := sets.NewString()
+	for _, label := range obj.Issue.Labels {
+		out.Insert(*label.Name)
+	}
+	return out
 }
 
 // GetLabelsWithPrefix will return a slice of all label names in `labels` which
@@ -514,6 +542,26 @@ func (obj *MungeObject) RemoveLabel(label string) error {
 		return err
 	}
 	return nil
+}
+
+// Priority returns the priority an issue was labeled with.
+// The labels must take the form 'priority/P?[0-9]+'
+// or math.MaxInt32 if unset
+func (obj *MungeObject) Priority() int {
+	priority := math.MaxInt32
+	priorityLabels := GetLabelsWithPrefix(obj.Issue.Labels, "priority/")
+	for _, label := range priorityLabels {
+		label = strings.TrimPrefix(label, "priority/")
+		label = strings.TrimPrefix(label, "P")
+		prio, err := strconv.Atoi(label)
+		if err != nil {
+			continue
+		}
+		if prio < priority {
+			priority = prio
+		}
+	}
+	return priority
 }
 
 // MungeFunction is the type that must be implemented and passed to ForEachIssueDo
@@ -626,7 +674,7 @@ func computeStatus(combinedStatus *github.CombinedStatus, requiredContexts []str
 
 	missing := requires.Difference(providers)
 	if missing.Len() != 0 {
-		glog.V(8).Infof("Failed to find %v in CombinedStatus for %s", missing.List(), combinedStatus.SHA)
+		glog.V(8).Infof("Failed to find %v in CombinedStatus for %s", missing.List(), *combinedStatus.SHA)
 		return "incomplete"
 	}
 	switch {
@@ -641,43 +689,99 @@ func computeStatus(combinedStatus *github.CombinedStatus, requiredContexts []str
 	}
 }
 
-// GetStatus gets the current status of a PR.
-//    * If any member of the 'requiredContexts' list is missing, it is 'incomplete'
-//    * If any is 'pending', the PR is 'pending'
-//    * If any is 'error', the PR is in 'error'
-//    * If any is 'failure', the PR is 'failure'
-//    * Otherwise the PR is 'success'
-func (obj *MungeObject) GetStatus(requiredContexts []string) (string, error) {
+func (obj *MungeObject) getCombinedStatus() (status *github.CombinedStatus) {
 	config := obj.config
 	pr, err := obj.GetPR()
 	if err != nil {
-		return "failure", err
+		return nil
 	}
 	if pr.Head == nil {
-		glog.Errorf("pr.Head is nil in GetStatus for PR# %d", *pr.Number)
-		return "failure", nil
+		glog.Errorf("pr.Head is nil in getCombinedStatus for PR# %d", *obj.Issue.Number)
+		return nil
 	}
 	// TODO If we have more than 100 statuses we need to deal with paging.
 	combinedStatus, response, err := config.client.Repositories.GetCombinedStatus(config.Org, config.Project, *pr.Head.SHA, &github.ListOptions{})
 	config.analytics.GetCombinedStatus.Call(config, response)
 	if err != nil {
 		glog.Errorf("Failed to get combined status: %v", err)
-		return "failure", err
+		return nil
 	}
+	return combinedStatus
+}
 
-	return computeStatus(combinedStatus, requiredContexts), nil
+// SetStatus allowes you to set the Github Status
+func (obj *MungeObject) SetStatus(state, url, description, context string) error {
+	config := obj.config
+	status := &github.RepoStatus{
+		State:       &state,
+		TargetURL:   &url,
+		Description: &description,
+		Context:     &context,
+	}
+	pr, err := obj.GetPR()
+	if err != nil {
+		return err
+	}
+	ref := *pr.Head.SHA
+	glog.Infof("PR %d setting %q Github status to %q", *obj.Issue.Number, context, description)
+	config.analytics.SetStatus.Call(config, nil)
+	if config.DryRun {
+		return nil
+	}
+	_, _, err = config.client.Repositories.CreateStatus(config.Org, config.Project, ref, status)
+	if err != nil {
+		glog.Errorf("Unable to set status. PR %d Ref: %q: %v", *obj.Issue.Number, ref, err)
+	}
+	return err
+}
+
+// GetStatus returns the actual requested status, or nil if not found
+func (obj *MungeObject) GetStatus(context string) *github.RepoStatus {
+	combinedStatus := obj.getCombinedStatus()
+	if combinedStatus == nil {
+		return nil
+	}
+	for _, status := range combinedStatus.Statuses {
+		if *status.Context == context {
+			return &status
+		}
+	}
+	return nil
+}
+
+// GetStatusState gets the current status of a PR.
+//    * If any member of the 'requiredContexts' list is missing, it is 'incomplete'
+//    * If any is 'pending', the PR is 'pending'
+//    * If any is 'error', the PR is in 'error'
+//    * If any is 'failure', the PR is 'failure'
+//    * Otherwise the PR is 'success'
+func (obj *MungeObject) GetStatusState(requiredContexts []string) string {
+	combinedStatus := obj.getCombinedStatus()
+	if combinedStatus == nil {
+		return "failure"
+	}
+	return computeStatus(combinedStatus, requiredContexts)
 }
 
 // IsStatusSuccess makes sure that the combined status for all commits in a PR is 'success'
 func (obj *MungeObject) IsStatusSuccess(requiredContexts []string) bool {
-	status, err := obj.GetStatus(requiredContexts)
-	if err != nil {
-		return false
-	}
+	status := obj.GetStatusState(requiredContexts)
 	if status == "success" {
 		return true
 	}
 	return false
+}
+
+// GetStatusTime returns when the status was set
+func (obj *MungeObject) GetStatusTime(context string) *time.Time {
+	status := obj.GetStatus(context)
+	if status == nil {
+		return nil
+	}
+	if status.UpdatedAt != nil {
+		return status.UpdatedAt
+	}
+	return status.CreatedAt
 }
 
 // Sleep for the given amount of time and then write to the channel
@@ -689,11 +793,7 @@ func timeout(sleepTime time.Duration, c chan bool) {
 func (obj *MungeObject) doWaitStatus(pending bool, requiredContexts []string, c chan error) {
 	config := obj.config
 	for {
-		status, err := obj.GetStatus(requiredContexts)
-		if err != nil {
-			c <- err
-			return
-		}
+		status := obj.GetStatusState(requiredContexts)
 		var done bool
 		if pending {
 			done = (status == "pending")
@@ -709,14 +809,7 @@ func (obj *MungeObject) doWaitStatus(pending bool, requiredContexts []string, c 
 			c <- nil
 			return
 		}
-		var sleepTime time.Duration
-		if pending {
-			// usually the build queue starts quickly
-			sleepTime = 30 * time.Second
-		} else {
-			// but takes a while to finish
-			sleepTime = 5 * time.Minute
-		}
+		sleepTime := 30 * time.Second
 		// If the time was explicitly set, use that instead
 		if config.PendingWaitTime != nil {
 			sleepTime = *config.PendingWaitTime
@@ -958,6 +1051,32 @@ func (obj *MungeObject) MergePR(who string) error {
 	return nil
 }
 
+// ListComments returns all comments for the issue/PR in question
+func (obj *MungeObject) ListComments(number int) ([]github.IssueComment, error) {
+	config := obj.config
+	issueNum := *obj.Issue.Number
+	allComments := []github.IssueComment{}
+
+	listOpts := &github.IssueListCommentsOptions{}
+
+	page := 1
+	for {
+		listOpts.ListOptions.Page = page
+		glog.V(8).Infof("Fetching page %d of comments for issue %d", page, issueNum)
+		comments, response, err := obj.config.client.Issues.ListComments(config.Org, config.Project, issueNum, listOpts)
+		config.analytics.ListComments.Call(config, response)
+		if err != nil {
+			return nil, err
+		}
+		allComments = append(allComments, comments...)
+		if response.LastPage == 0 || response.LastPage <= page {
+			break
+		}
+		page++
+	}
+	return allComments, nil
+}
+
 // WriteComment will send the `msg` as a comment to the specified PR
 func (obj *MungeObject) WriteComment(msg string) error {
 	config := obj.config
@@ -969,6 +1088,27 @@ func (obj *MungeObject) WriteComment(msg string) error {
 	}
 	if _, _, err := config.client.Issues.CreateComment(config.Org, config.Project, prNum, &github.IssueComment{Body: &msg}); err != nil {
 		glog.Errorf("%v", err)
+		return err
+	}
+	return nil
+}
+
+// DeleteComment will remove the specified comment
+func (obj *MungeObject) DeleteComment(comment *github.IssueComment) error {
+	config := obj.config
+	prNum := *obj.Issue.Number
+	config.analytics.DeleteComment.Call(config, nil)
+	if comment.ID == nil {
+		err := fmt.Errorf("Found a comment with nil id for Issue %d", prNum)
+		glog.Errorf("Found a comment with nil id for Issue %d", prNum)
+		return err
+	}
+	glog.Infof("Removing comment %d from Issue %d", *comment.ID, prNum)
+	if config.DryRun {
+		return nil
+	}
+	if _, err := config.client.Issues.DeleteComment(config.Org, config.Project, *comment.ID); err != nil {
+		glog.Errorf("Error removing comment: %v", err)
 		return err
 	}
 	return nil
@@ -1030,6 +1170,7 @@ func (config *Config) ForEachIssueDo(fn MungeFunction) error {
 		listOpts := &github.IssueListByRepoOptions{
 			Sort:        "created",
 			State:       "open",
+			Direction:   "asc",
 			ListOptions: github.ListOptions{PerPage: 100, Page: page},
 		}
 		issues, response, err := config.client.Issues.ListByRepo(config.Org, config.Project, listOpts)
@@ -1056,7 +1197,7 @@ func (config *Config) ForEachIssueDo(fn MungeFunction) error {
 				continue
 			}
 			glog.V(2).Infof("----==== %d ====----", *issue.Number)
-			glog.V(8).Infof("Issue %d labels: %v isPR: %v", *issue.Number, issue.Labels, issue.PullRequestLinks == nil)
+			glog.V(8).Infof("Issue %d labels: %v isPR: %v", *issue.Number, issue.Labels, issue.PullRequestLinks != nil)
 			obj := MungeObject{
 				config: config,
 				Issue:  issue,
@@ -1071,4 +1212,46 @@ func (config *Config) ForEachIssueDo(fn MungeFunction) error {
 		page++
 	}
 	return nil
+}
+
+// ListAllIssues grabs all issues matching the options, so you don't have to
+// worry about paging. Enforces some constraints, like min/max PR number and
+// having a valid user.
+func (config *Config) ListAllIssues(listOpts *github.IssueListByRepoOptions) ([]*github.Issue, error) {
+	allIssues := []*github.Issue{}
+	page := 1
+	for {
+		glog.V(4).Infof("Fetching page %d of issues", page)
+		listOpts.ListOptions = github.ListOptions{PerPage: 100, Page: page}
+		issues, response, err := config.client.Issues.ListByRepo(config.Org, config.Project, listOpts)
+		config.analytics.ListIssues.Call(config, response)
+		if err != nil {
+			return nil, err
+		}
+		for i := range issues {
+			issue := &issues[i]
+			if issue.Number == nil {
+				glog.Infof("Skipping issue with no number, very strange")
+				continue
+			}
+			if issue.User == nil || issue.User.Login == nil {
+				glog.V(2).Infof("Skipping PR %d with no user info %#v.", *issue.Number, issue.User)
+				continue
+			}
+			if *issue.Number < config.MinPRNumber {
+				glog.V(6).Infof("Dropping %d < %d", *issue.Number, config.MinPRNumber)
+				continue
+			}
+			if *issue.Number > config.MaxPRNumber {
+				glog.V(6).Infof("Dropping %d > %d", *issue.Number, config.MaxPRNumber)
+				continue
+			}
+			allIssues = append(allIssues, issue)
+		}
+		if response.LastPage == 0 || response.LastPage <= page {
+			break
+		}
+		page++
+	}
+	return allIssues, nil
 }

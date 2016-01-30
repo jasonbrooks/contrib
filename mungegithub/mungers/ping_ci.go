@@ -56,24 +56,15 @@ func (PingCIMunger) Munge(obj *github.MungeObject) {
 	}
 	mergeable, err := obj.IsMergeable()
 	if err != nil {
-		glog.V(2).Infof("Skipping %d - problem determining mergeability", *obj.Issue.Number)
+		glog.V(2).Infof("ping CI skipping %d - problem determining mergeability", *obj.Issue.Number)
 		return
 	}
 	if !mergeable {
-		glog.V(2).Infof("Skipping %d - not mergeable", *obj.Issue.Number)
+		glog.V(2).Infof("ping CI skipping %d - not mergeable", *obj.Issue.Number)
 		return
 	}
-	if status, err := obj.GetStatus([]string{jenkinsCIContext, travisContext}); err == nil && status != "incomplete" {
-		glog.V(2).Info("Have %s status - skipping ping CI", jenkinsCIContext)
-		return
-	}
-	status, err := obj.GetStatus([]string{shippableContext, travisContext})
-	if err != nil {
-		glog.Errorf("unexpected error getting status: %v", err)
-		return
-	}
-	if status == "incomplete" {
-		msg := "Continuous integration appears to have missed, closing and re-opening to trigger it"
+	if state := obj.GetStatusState([]string{travisContext}); state == "incomplete" {
+		msg := "Travis continuous integration appears to have missed, closing and re-opening to trigger it"
 		obj.WriteComment(msg)
 
 		obj.ClosePR()

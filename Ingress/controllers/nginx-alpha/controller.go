@@ -26,8 +26,6 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/util"
 )
 
@@ -37,6 +35,11 @@ events {
   worker_connections 1024;
 }
 http {
+  # http://nginx.org/en/docs/http/ngx_http_core_module.html
+  types_hash_max_size 2048;
+  server_names_hash_max_size 512;
+  server_names_hash_bucket_size 64;
+
 {{range $ing := .Items}}
 {{range $rule := $ing.Spec.Rules}}
   server {
@@ -44,7 +47,8 @@ http {
     server_name {{$rule.Host}};
 {{ range $path := $rule.HTTP.Paths }}
     location {{$path.Path}} {
-      proxy_pass http://{{$path.Backend.ServiceName}};
+      proxy_set_header Host $host;
+      proxy_pass http://{{$path.Backend.ServiceName}}.{{$ing.Namespace}}.svc.cluster.local:{{$path.Backend.ServicePort}};
     }{{end}}
   }{{end}}{{end}}
 }`
@@ -72,8 +76,12 @@ func main() {
 	shellOut("nginx")
 	for {
 		rateLimiter.Accept()
-		ingresses, err := ingClient.List(labels.Everything(), fields.Everything())
-		if err != nil || reflect.DeepEqual(ingresses.Items, known.Items) {
+		ingresses, err := ingClient.List(api.ListOptions{})
+		if err != nil {
+			log.Printf("Error retrieving ingresses: %v", err)
+			continue
+		}
+		if reflect.DeepEqual(ingresses.Items, known.Items) {
 			continue
 		}
 		known = ingresses

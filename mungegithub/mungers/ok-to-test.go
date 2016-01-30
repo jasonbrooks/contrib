@@ -52,16 +52,13 @@ func (OkToTestMunger) Munge(obj *github.MungeObject) {
 	if !obj.HasLabel("lgtm") {
 		return
 	}
-	status, err := obj.GetStatus([]string{"Jenkins GCE e2e"})
-	if err != nil {
-		glog.Errorf("unexpected error getting status: %v", err)
-		return
-	}
-	if status == "incomplete" {
+	state := obj.GetStatusState([]string{jenkinsE2EContext, jenkinsUnitContext})
+	if state == "incomplete" {
 		glog.V(2).Infof("status is incomplete, adding ok to test")
 		msg := `@k8s-bot ok to test
+@k8s-bot test this
 
-	pr builder appears to be missing, activating due to 'lgtm' label.`
+pr builder appears to be missing, activating due to 'lgtm' label.`
 		obj.WriteComment(msg)
 	}
 }
