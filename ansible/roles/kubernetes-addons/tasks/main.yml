@@ -80,3 +80,9 @@
 
 - name: Enable and start kube addons
   service: name=kube-addons enabled=yes state=started
+  when: not is_atomic
+
+- include: atomic-addons.yml
+  when: is_atomic
+
+
