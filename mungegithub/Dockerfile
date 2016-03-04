@@ -15,16 +15,18 @@
 FROM google/debian:wheezy
 MAINTAINER Brendan Burns <bburns@google.com>
 RUN apt-get update
-RUN apt-get install -y -qq ca-certificates
-ADD mungegithub /mungegithub
-ADD blunderbuss.yml /blunderbuss.yml
+RUN apt-get install -y -qq ca-certificates git
+
+EXPOSE 8080
+ENTRYPOINT ["/mungegithub"]
+CMD ["--dry-run", "--token-file=/token"]
+
 ADD path-label.txt /path-label.txt
+ADD block-path.yaml /block-path.yaml
 ADD generated-files.txt /generated-files.txt
 # User lists for submit-queue and 'needs-ok-to-merge'
 ADD committers.txt /committers.txt
 ADD whitelist.txt /whitelist.txt
 # Submit queue web interface
 ADD www /www
-EXPOSE 8080
-ENTRYPOINT ["/mungegithub"]
-CMD ["--dry-run", "--token-file=/token"]
+ADD mungegithub /mungegithub

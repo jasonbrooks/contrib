@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,11 @@ const (
 
 	headerRateRemaining = "X-RateLimit-Remaining"
 	headerRateReset     = "X-RateLimit-Reset"
+)
+
+var (
+	releaseMilestoneRE = regexp.MustCompile(`^v[\d]+.[\d]$`)
+	maxTime            = time.Unix(1<<63-62135596801, 999999999) // http://stackoverflow.com/questions/25065055/what-is-the-maximum-time-time-in-go
 )
 
 type callLimitRoundTripper struct {
@@ -268,7 +274,7 @@ func (config *Config) AddRootFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&config.TokenFile, "token-file", "", "The file containing the OAuth Token to use for requests.")
 	cmd.PersistentFlags().IntVar(&config.MinPRNumber, "min-pr-number", 0, "The minimum PR to start with")
 	cmd.PersistentFlags().IntVar(&config.MaxPRNumber, "max-pr-number", maxInt, "The maximum PR to start with")
-	cmd.PersistentFlags().BoolVar(&config.DryRun, "dry-run", false, "If true, don't actually merge anything")
+	cmd.PersistentFlags().BoolVar(&config.DryRun, "dry-run", true, "If true, don't actually merge anything")
 	cmd.PersistentFlags().BoolVar(&config.useMemoryCache, "use-http-cache", true, "If true, use a client side HTTP cache for API requests.")
 	cmd.PersistentFlags().StringVar(&config.Org, "organization", "kubernetes", "The github organization to scan")
 	cmd.PersistentFlags().StringVar(&config.Project, "project", "kubernetes", "The github project to scan")
@@ -377,12 +383,50 @@ func (config *Config) SetClient(client *github.Client) {
 	config.client = client
 }
 
-// GetObject will return an object (with only the issue filled in)
-func (config *Config) GetObject(num int) (*MungeObject, error) {
+func (config *Config) getPR(num int) (*github.PullRequest, error) {
+	pr, response, err := config.client.PullRequests.Get(config.Org, config.Project, num)
+	config.analytics.GetPR.Call(config, response)
+	if err != nil {
+		glog.Errorf("Error getting PR# %d: %v", num, err)
+		return nil, err
+	}
+	return pr, nil
+}
+
+func (config *Config) getIssue(num int) (*github.Issue, error) {
 	issue, resp, err := config.client.Issues.Get(config.Org, config.Project, num)
 	config.analytics.GetIssue.Call(config, resp)
 	if err != nil {
-		glog.Errorf("GetObject: %v", err)
+		glog.Errorf("getIssue: %v", err)
+		return nil, err
+	}
+	return issue, nil
+}
+
+// Refresh will refresh the Issue (and PR if this is a PR)
+// (not the commits or events)
+func (obj *MungeObject) Refresh() error {
+	num := *obj.Issue.Number
+	issue, err := obj.config.getIssue(num)
+	if err != nil {
+		return err
+	}
+	obj.Issue = issue
+	if !obj.IsPR() {
+		return nil
+	}
+	pr, err := obj.config.getPR(*obj.Issue.Number)
+	if err != nil {
+		return err
+	}
+	obj.pr = pr
+	return nil
+}
+
+// GetObject will return an object (with only the issue filled in)
+func (config *Config) GetObject(num int) (*MungeObject, error) {
+	issue, err := config.getIssue(num)
+	if err != nil {
 		return nil, err
 	}
 	obj := &MungeObject{
@@ -390,6 +434,20 @@ func (config *Config) GetObject(num int) (*MungeObject, error) {
 		Issue:  issue,
 	}
 	return obj, nil
+}
+
+// IsForBranch return true if the object is a PR for a branch with the given
+// name. It return false if it is not a pr, it isn't against the given branch,
+// or we can't tell
+func (obj *MungeObject) IsForBranch(branch string) bool {
+	pr, err := obj.GetPR()
+	if err != nil {
+		return false
+	}
+	if pr.Base != nil && pr.Base.Ref != nil && *pr.Base.Ref == branch {
+		return true
+	}
+	return false
 }
 
 // LastModifiedTime returns the time the last commit was made
@@ -542,6 +600,28 @@ func (obj *MungeObject) RemoveLabel(label string) error {
 		return err
 	}
 	return nil
+}
+
+// ReleaseMilestoneDue returns the due date for a milestone. It ONLY looks at
+// milestones of the form 'vX.Y' where X and Y are integeters. Return the maximum
+// possible time if there is no milestone or the milestone doesn't look like a
+// release milestone
+func (obj *MungeObject) ReleaseMilestoneDue() time.Time {
+	milestone := obj.Issue.Milestone
+	if milestone == nil {
+		return maxTime
+	}
+	title := milestone.Title
+	if title == nil {
+		return maxTime
+	}
+	if !releaseMilestoneRE.MatchString(*title) {
+		return maxTime
+	}
+	if milestone.DueOn == nil {
+		return maxTime
+	}
+	return *milestone.DueOn
 }
 
 // Priority returns the priority an issue was labeled with.
@@ -896,21 +976,7 @@ func (obj *MungeObject) GetCommits() ([]github.RepositoryCommit, error) {
 	return filledCommits, nil
 }
 
-// RefreshPR will get the PR again, in case anything changed since last time
-func (obj *MungeObject) RefreshPR() (*github.PullRequest, error) {
-	config := obj.config
-	issueNum := *obj.Issue.Number
-	pr, response, err := config.client.PullRequests.Get(config.Org, config.Project, issueNum)
-	config.analytics.GetPR.Call(config, response)
-	if err != nil {
-		glog.Errorf("Error getting PR# %d: %v", issueNum, err)
-		return nil, err
-	}
-	obj.pr = pr
-	return pr, nil
-}
-
-// GetPR will update the PR in the object.
+// GetPR will return the PR of the object.
 func (obj *MungeObject) GetPR() (*github.PullRequest, error) {
 	if obj.pr != nil {
 		return obj.pr, nil
@@ -918,7 +984,12 @@ func (obj *MungeObject) GetPR() (*github.PullRequest, error) {
 	if !obj.IsPR() {
 		return nil, fmt.Errorf("Issue: %d is not a PR", *obj.Issue.Number)
 	}
-	return obj.RefreshPR()
+	pr, err := obj.config.getPR(*obj.Issue.Number)
+	if err != nil {
+		return nil, err
+	}
+	obj.pr = pr
+	return pr, nil
 }
 
 // AssignPR will assign `prNum` to the `owner` where the `owner` is asignee's github login
@@ -1131,7 +1202,12 @@ func (obj *MungeObject) IsMergeable() (bool, error) {
 		glog.V(4).Infof("Waiting for mergeability on %q %d", *pr.Title, *pr.Number)
 		// TODO: determine what a good empirical setting for this is.
 		time.Sleep(2 * time.Second)
-		pr, err = obj.RefreshPR()
+		err := obj.Refresh()
+		if err != nil {
+			glog.Errorf("Unable to refresh PR# %d: %v", prNum, err)
+			return false, err
+		}
+		pr, err = obj.GetPR()
 		if err != nil {
 			glog.Errorf("Unable to get PR# %d: %v", prNum, err)
 			return false, err

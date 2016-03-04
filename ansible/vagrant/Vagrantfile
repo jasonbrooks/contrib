@@ -62,7 +62,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   def set_vbox(vb, config)
     if $distro_type === "centos"
-      config.vm.box = "chef/centos-7.0"
+      config.vm.box = "centos/7"
     end
     if $distro_type === "fedora"
       config.vm.box = "fedora/23-cloud-base"

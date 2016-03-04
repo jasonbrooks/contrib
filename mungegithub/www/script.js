@@ -11,14 +11,41 @@ function SQCntl(dataService, $interval, $location) {
   self.prQuerySearch = prQuerySearch;
   self.historyQuerySearch = historyQuerySearch;
   self.goToPerson = goToPerson;
+  self.selectTab = selectTab;
   self.queryNum = 0;
+  self.selected = 0;
   self.StatOrder = "-Count";
+  self.location = $location;
 
   // http://submit-queue.k8s.io/#?prDisplay=eparis&historyDisplay=15999
   //  will show all PRs opened by eparis and all historic decisions for PR #15999
-  var vars = $location.search()
-  self.prDisplayValue = vars.prDisplay
-  self.historyDisplayValue = vars.historyDisplay
+  var vars = $location.search();
+  self.prDisplayValue = vars.prDisplay;
+  self.historyDisplayValue = vars.historyDisplay;
+
+  var path = $location.path();
+  if (path.length > 0) {
+      switch (path) {
+      case "/prs":
+	  self.selected=0;
+	  break;
+      case "/queue":
+	  self.selected=1;
+	  break;
+      case "/history":
+	  self.selected=2;
+	  break;
+      case "/e2e":
+	  self.selected=3;
+	  break;
+      case "/info":
+	  self.selected=4;
+	  break;
+      default:
+	  console.log("unknown path: " + path);
+	  break;
+      }
+  }
 
   // Refresh data every 10 minutes
   refreshPRs();
@@ -212,6 +239,26 @@ function SQCntl(dataService, $interval, $location) {
   function goToPerson(person) {
     console.log(person);
     window.location.href = 'https://github.com/' + person;
+  }
+
+  function selectTab(tabName) {
+    self.location.path('/' + tabName);
+  }
+
+  getPriorityInfo()
+
+  function getPriorityInfo() {
+    dataService.getData('priority-info').then(function successCallback(response) {
+      document.getElementById("priority-info").innerHTML = response.data;
+    });
+  }
+
+  getMergeInfo()
+
+  function getMergeInfo() {
+    dataService.getData('merge-info').then(function successCallback(response) {
+      document.getElementById("merge-info").innerHTML = response.data;
+    });
   }
 }
 

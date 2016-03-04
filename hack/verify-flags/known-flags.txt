@@ -1,5 +1,6 @@
 api-token
 balance-algorithm
+block-path-config
 blunderbuss-config
 blunderbuss-reassign
 cluster-uid
@@ -11,6 +12,7 @@ dont-require-e2e-label
 dry-run
 e2e-status-context
 election-namespace
+enable-output-coloring
 error-page
 etcd-prefix
 etcd-server
@@ -26,7 +28,9 @@ issue-mungers
 issue-reports
 jenkins-host
 jenkins-jobs
+kubernetes-dir
 last-release-pr
+left-build-number
 max-pr-number
 min-pr-number
 network-config
@@ -37,11 +41,13 @@ rate-limit
 rate-limit-burst
 relnote-filter
 required-contexts
+right-build-number
 running-in-cluster
 shame-cc
 shame-from
 shame-report-cmd
 source-file
+start-from
 stats-port
 sync-period
 tcp-services
@@ -61,3 +67,4 @@ custom-error-service
 use-unicast
 ssl-ca-cert
 ssl-cert
+vrrp-password
