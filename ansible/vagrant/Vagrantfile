@@ -5,9 +5,8 @@ require "yaml"
 ### This is a new provider, different then cloudbau's.
 ### RUN: vagrant plugin uninstall vagrant-openstack-plugin"
 ### Then RUN: "vagrant plugin install vagrant-openstack-provider"
-require 'vagrant-openstack-provider'
+#require 'vagrant-openstack-provider'
 
-$distro_type = ENV['DISTRO_TYPE'] || 'centos-atomic'
 $num_nodes = (ENV['NUM_NODES'] || 2).to_i
 $ansible_tags = ENV['ANSIBLE_TAGS']
 # OS image to use. Currently supported:
@@ -52,6 +51,12 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     case $os_image
     when :centos7
       config.vm.box = "centos/7"
+    when :centosatomic
+      config.vm.box = "centos/atomic-host"
+    when :fedora
+      config.vm.box = "fedora/23-cloud-base"
+    when :fedoraatomic
+      config.vm.box = "fedora/23-atomic-host" 
     when :coreos
       config.vm.box = "coreos-%s" % $coreos_update_channel
       if $coreos_image_version != "current"
@@ -65,8 +70,13 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   def set_libvirt_box(config)
     case $os_image
     when :centos7
-      config.vm.box = "kube-centos-7"
-      config.vm.box_url = "http://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7.LibVirt.box"
+      config.vm.box = "centos/7"
+    when :centosatomic
+      config.vm.box = "centos/atomic-host"
+    when :fedora
+      config.vm.box = "fedora/23-cloud-base"
+    when :fedoraatomic
+      config.vm.box = "fedora/23-atomic-host"
     end
   end
 
