@@ -11,6 +11,9 @@ $num_nodes = (ENV['NUM_NODES'] || 2).to_i
 $ansible_tags = ENV['ANSIBLE_TAGS']
 # OS image to use. Currently supported:
 # - "centos7" on openstack, libvirt, virtualbox
+# - "centosatomic" on openstack, libvirt, virtualbox
+# - "fedora" on openstack, libvirt, virtualbox
+# - "fedoraatomic" on openstack, libvirt, virtualbox
 # - "coreos" on virtualbox
 $os_image = (ENV['OS_IMAGE'] || "centos7").to_sym
 
