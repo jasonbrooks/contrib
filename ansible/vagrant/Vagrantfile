@@ -5,7 +5,7 @@ require "yaml"
 ### This is a new provider, different then cloudbau's.
 ### RUN: vagrant plugin uninstall vagrant-openstack-plugin"
 ### Then RUN: "vagrant plugin install vagrant-openstack-provider"
-#require 'vagrant-openstack-provider'
+require 'vagrant-openstack-provider'
 
 $num_nodes = (ENV['NUM_NODES'] || 2).to_i
 $ansible_tags = ENV['ANSIBLE_TAGS']
