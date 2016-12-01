@@ -1,0 +1,16 @@
+[Unit]
+Description=Kubernetes API Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+
+[Service]
+TimeoutStartSec=0
+Restart=always
+ExecStartPre=-/usr/bin/docker stop %n
+ExecStartPre=-/usr/bin/docker rm %n
+ExecStartPre=/usr/bin/docker pull jasonbrooks/kubernetes-apiserver:f25
+ExecStart=/usr/bin/docker run --rm --net=host --net=uts -p 443:443 -v /etc/kubernetes:/etc/kubernetes:z -v /etc/ssl:/etc/ssl:z --name %n jasonbrooks/kubernetes-apiserver:f25
+
+[Install]
+WantedBy=multi-user.target
