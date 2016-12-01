@@ -1,0 +1,16 @@
+[Unit]
+Description=Kubernetes Scheduler Plugin
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=docker.service
+Requires=docker.service
+
+[Service]
+TimeoutStartSec=0
+Restart=always
+ExecStartPre=-/usr/bin/docker stop %n
+ExecStartPre=-/usr/bin/docker rm %n
+ExecStartPre=/usr/bin/docker pull jasonbrooks/kubernetes-scheduler:f25
+ExecStart=/usr/bin/docker run --rm --net=host -v /etc/kubernetes:/etc/kubernetes:z --name %n jasonbrooks/kubernetes-scheduler:f25
+
+[Install]
+WantedBy=multi-user.target

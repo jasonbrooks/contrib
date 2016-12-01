@@ -1,0 +1,25 @@
+---
+- name: Install packages
+  raw: rpm-ostree install --reboot etcd flannel kubernetes-node
+  ignore_errors: yes
+
+- name: Wait for hosts to restart
+  local_action:
+    module: wait_for
+      host={{ inventory_hostname }}
+      port=22
+      delay=1
+      timeout=300
+  sudo: false
+
+- name: Place master component service files
+  template: src={{ item }} dest=/etc/systemd/system/
+  with_items:
+    - kube-apiserver.service
+    - kube-scheduler.service
+    - kube-controller-manager.service
+  when: inventory_hostname in groups['masters']
+
+- name: daemon-reload
+  raw: systemctl daemon-reload
+  when: inventory_hostname in groups['masters']
