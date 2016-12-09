@@ -58,6 +58,12 @@
         state: latest
   when: etcd_source_type == "package-manager"
 
+- name: install etcd
+  shell: atomic install --system --set ETCD_LISTEN_CLIENT_URLS="{{ etcd_listen_client_urls }}" --name etcd jasonbrooks/etcd:f25
+  ignore_errors: true
+  when: is_atomic
+
+
 - name: Set the etcd_modified fact to true
   set_fact:
     etcd_modified: true
