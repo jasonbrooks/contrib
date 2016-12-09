@@ -18,6 +18,19 @@
   shell: "/usr/bin/etcdctl --no-sync --peers={{ peers }} set {{ conf_loc }} < {{ conf_file }}"
   run_once: true
   delegate_to: "{{ groups['etcd'][0] }}"
+  when: not is_atomic
+
+- name: Load the flannel config file into etcd
+  shell: "runc exec -- etcd /usr/bin/etcdctl --no-sync --peers={{ peers }} set {{ conf_loc }} < {{ conf_file }}"
+  run_once: true
+  delegate_to: "{{ groups['etcd'][0] }}"
+  when: is_atomic
+  ignore_errors: true
+
+#- name: make docker use flannel
+#  shell: echo "/usr/libexec/flannel/mk-docker-opts.sh -k DOCKER_NETWORK_OPTIONS -d /run/flannel/docker" | runc exec flanneld bash
+#  when: is_atomic
+
 
 - name: Clean up the flannel config file
   file: path=/tmp/flannel-config.json state=absent
