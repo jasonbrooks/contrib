@@ -59,7 +59,7 @@
   when: etcd_source_type == "package-manager"
 
 - name: install etcd
-  shell: atomic install --system --set ETCD_LISTEN_CLIENT_URLS="{{ etcd_listen_client_urls }}" --name etcd jasonbrooks/etcd:f25
+  shell: atomic install --system --set ETCD_LISTEN_CLIENT_URLS={{ etcd_listen_client_urls }} --name etcd jasonbrooks/etcd:f25
   ignore_errors: true
   when: is_atomic
 
