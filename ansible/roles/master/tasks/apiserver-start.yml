@@ -6,7 +6,3 @@
 - name: Start apiserver
   service: name=kube-apiserver state=started
   register: apiserver_started
-
-- name: copy apiserver kubectl
-  command: docker cp kube-apiserver.service:/usr/bin/kubectl /usr/local/bin/kubectl
-  when: is_atomic 
