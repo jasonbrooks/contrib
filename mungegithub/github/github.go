@@ -63,8 +63,17 @@ var (
 	priorityLabelRE    = regexp.MustCompile(`priority/[pP]([\d]+)`)
 	fixesIssueRE       = regexp.MustCompile(`(?i)(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[\s]+#([\d]+)`)
 	reviewableFooterRE = regexp.MustCompile(`(?s)<!-- Reviewable:start -->.*<!-- Reviewable:end -->`)
+	htmlCommentRE      = regexp.MustCompile(`(?s)<!--[^<>]*?-->\n?`)
 	maxTime            = time.Unix(1<<63-62135596801, 999999999) // http://stackoverflow.com/questions/25065055/what-is-the-maximum-time-time-in-go
+
+	// How long we locally cache the combined status of an object. We will not
+	// hit the github API more than this often (per mungeObject) no matter how
+	// often a caller asks for the status. Ca be much much faster for testing
+	combinedStatusLifetime = 5 * time.Second
 )
+
+func stringPtr(val string) *string { return &val }
+func boolPtr(val bool) *bool       { return &val }
 
 type callLimitRoundTripper struct {
 	sync.Mutex
@@ -161,6 +170,7 @@ type Config struct {
 
 	HTTPCacheDir  string
 	HTTPCacheSize uint64
+	httpCache     httpcache.Cache
 
 	MinPRNumber int
 	MaxPRNumber int
@@ -214,6 +224,7 @@ type analytics struct {
 	SetStatus            analytic
 	GetPR                analytic
 	AssignPR             analytic
+	UnassignPR           analytic
 	ClosePR              analytic
 	OpenPR               analytic
 	GetContents          analytic
@@ -225,6 +236,8 @@ type analytics struct {
 	GetUser              analytic
 	SetMilestone         analytic
 	ListMilestones       analytic
+	GetBranch            analytic
+	EditBranch           analytic
 }
 
 func (a analytics) print() {
@@ -261,6 +274,8 @@ func (a analytics) print() {
 	fmt.Fprintf(w, "GetUser\t%d\t\n", a.GetUser.Count)
 	fmt.Fprintf(w, "SetMilestone\t%d\t\n", a.SetMilestone.Count)
 	fmt.Fprintf(w, "ListMilestones\t%d\t\n", a.ListMilestones.Count)
+	fmt.Fprintf(w, "GetBranch\t%d\t\n", a.GetBranch.Count)
+	fmt.Fprintf(w, "EditBranch\t%d\t\n", a.EditBranch.Count)
 	w.Flush()
 	glog.V(2).Infof("\n%v", buf)
 }
@@ -276,6 +291,11 @@ type MungeObject struct {
 	comments    []*github.IssueComment
 	prComments  []*github.PullRequestComment
 	commitFiles []*github.CommitFile
+
+	// we cache the combinedStatus for `combinedStatusLifetime` seconds.
+	combinedStatus     *github.CombinedStatus
+	combinedStatusTime time.Time
+
 	Annotations map[string]string //annotations are things you can set yourself.
 }
 
@@ -308,6 +328,15 @@ func TestObject(config *Config, issue *github.Issue, pr *github.PullRequest, com
 		events:      events,
 		Annotations: map[string]string{},
 	}
+}
+
+// SetCombinedStatusLifetime will set the lifetime of CombinedStatus responses.
+// Even though we would likely use conditional API calls hitting the CombinedStatus API
+// every time we want to get a specific value is just too mean to github. This defaults
+// to `combinedStatusLifetime` seconds. If you are doing local testing you may want to make
+// this (much) shorter
+func SetCombinedStatusLifetime(lifetime time.Duration) {
+	combinedStatusLifetime = lifetime
 }
 
 // AddRootFlags will add all of the flags needed for the github config to the cobra command
@@ -379,8 +408,11 @@ func (config *Config) PreExecute() error {
 		})
 		cache := diskcache.NewWithDiskv(d)
 		t = httpcache.NewTransport(cache)
+		config.httpCache = cache
 	} else {
-		t = httpcache.NewMemoryCacheTransport()
+		cache := httpcache.NewMemoryCache()
+		t = httpcache.NewTransport(cache)
+		config.httpCache = cache
 	}
 	t.Transport = transport
 
@@ -491,6 +523,102 @@ func (config *Config) getIssue(num int) (*github.Issue, error) {
 		return nil, err
 	}
 	return issue, nil
+}
+
+func (config *Config) deleteCache(resp *github.Response) {
+	cache := config.httpCache
+	if cache == nil {
+		return
+	}
+	if resp.Response == nil {
+		return
+	}
+	req := resp.Response.Request
+	if req == nil {
+		return
+	}
+	cacheKey := req.URL.String()
+	glog.Infof("Deleting cache entry for %q", cacheKey)
+	cache.Delete(cacheKey)
+}
+
+// protects a branch and sets the required contexts
+func (config *Config) setBranchProtection(name string, contexts []string) error {
+	config.analytics.EditBranch.Call(config, nil)
+	glog.Infof("Setting protections for branch: %s", name)
+	if config.DryRun {
+		return nil
+	}
+	branch := &github.Branch{
+		Name: &name,
+		Protection: &github.Protection{
+			Enabled: boolPtr(true),
+			RequiredStatusChecks: &github.RequiredStatusChecks{
+				EnforcementLevel: stringPtr("non_admins"),
+				Contexts:         &contexts,
+			},
+		},
+	}
+	_, _, err := config.client.Repositories.EditBranch(config.Org, config.Project, name, branch)
+	if err != nil {
+		glog.Errorf("Unable to edit branch protections for %s: %v", name, err)
+	}
+	return err
+}
+
+// needsBranchProtection returns true if the branch is protected by exactly the set of
+// contexts in the argument
+func (config *Config) needsBranchProtection(branch *github.Branch, contexts []string) bool {
+	if branch == nil {
+		glog.Errorf("got a nil branch in needsBranchProtection()")
+		return true
+	}
+
+	if branch.Protection == nil {
+		glog.Infof("Setting branch protections because branch.Protection is nil")
+		return true
+	}
+	if branch.Protection.Enabled == nil || *branch.Protection.Enabled == false {
+		glog.Infof("Setting branch protections because branch.Protection.Enabled is wrong")
+		return true
+	}
+	if branch.Protection.RequiredStatusChecks == nil {
+		glog.Infof("Setting branch protections because branch.Protection.RequiredStatusChecks is nil")
+		return true
+	}
+	if branch.Protection.RequiredStatusChecks.EnforcementLevel == nil || *branch.Protection.RequiredStatusChecks.EnforcementLevel != "non_admins" {
+		glog.Infof("Setting branch protections because branch.Protection.RequiredStatusChecks.EnforcementLevel is wrong")
+		return true
+	}
+	if branch.Protection.RequiredStatusChecks.Contexts == nil {
+		glog.Infof("Setting branch protections because branch.Protection.RequiredStatusChecks.Contexts is wrong")
+		return true
+	}
+	branchContexts := *branch.Protection.RequiredStatusChecks.Contexts
+
+	oldSet := sets.NewString(branchContexts...)
+	newSet := sets.NewString(contexts...)
+	if !oldSet.Equal(newSet) {
+		glog.Infof("Updating branch protections old: %v new:%v", oldSet.List(), newSet.List())
+		return true
+	}
+	return false
+}
+
+// SetBranchProtection protects a branch and sets the required contexts
+func (config *Config) SetBranchProtection(name string, contexts []string) error {
+	branch, resp, err := config.client.Repositories.GetBranch(config.Org, config.Project, name)
+	config.analytics.GetBranch.Call(config, resp)
+	if err != nil {
+		glog.Errorf("Got error getting branch %s: %v", name, err)
+		return err
+	}
+
+	if !config.needsBranchProtection(branch, contexts) {
+		return nil
+	}
+
+	return config.setBranchProtection(name, contexts)
 }
 
 // Refresh will refresh the Issue (and PR if this is a PR)
@@ -1031,6 +1159,7 @@ func (obj *MungeObject) GetEvents() ([]*github.IssueEvent, error) {
 	page := 1
 	// Try to work around not finding events--suspect some cache invalidation bug when the number of pages changes.
 	tryNextPageAnyway := false
+	var lastResponse *github.Response
 	for {
 		eventPage, response, err := config.client.Issues.ListIssueEvents(config.Org, config.Project, prNum, &github.ListOptions{PerPage: 100, Page: page})
 		config.analytics.ListIssueEvents.Call(config, response)
@@ -1047,12 +1176,14 @@ func (obj *MungeObject) GetEvents() ([]*github.IssueEvent, error) {
 				break
 			}
 			glog.Infof("For %v: supposedly there weren't more events, but we asked anyway and found %v more.", prNum, len(eventPage))
+			obj.config.deleteCache(lastResponse)
 			tryNextPageAnyway = false
 		}
 		events = append(events, eventPage...)
 		if response.LastPage == 0 || response.LastPage <= page {
 			if len(events)%100 == 0 {
 				tryNextPageAnyway = true
+				lastResponse = response
 			} else {
 				break
 			}
@@ -1098,6 +1229,11 @@ func computeStatus(combinedStatus *github.CombinedStatus, requiredContexts []str
 }
 
 func (obj *MungeObject) getCombinedStatus() (status *github.CombinedStatus) {
+	now := time.Now()
+	if now.Before(obj.combinedStatusTime.Add(combinedStatusLifetime)) {
+		return obj.combinedStatus
+	}
+
 	config := obj.config
 	pr, err := obj.GetPR()
 	if err != nil {
@@ -1114,6 +1250,8 @@ func (obj *MungeObject) getCombinedStatus() (status *github.CombinedStatus) {
 		glog.Errorf("Failed to get combined status: %v", err)
 		return nil
 	}
+	obj.combinedStatus = combinedStatus
+	obj.combinedStatusTime = now
 	return combinedStatus
 }
 
@@ -1228,6 +1366,12 @@ func (obj *MungeObject) doWaitStatus(pending bool, requiredContexts []string, c 
 			glog.V(4).Infof("PR# %d is pending, waiting for %f seconds", *obj.Issue.Number, sleepTime.Seconds())
 		}
 		time.Sleep(sleepTime)
+
+		// If it has been closed, assume that we want to break from the poll loop early.
+		obj.Refresh()
+		if obj.Issue != nil && obj.Issue.State != nil && *obj.Issue.State == "closed" {
+			c <- fmt.Errorf("PR# %d has been closed", *obj.Issue.Number)
+		}
 	}
 }
 
@@ -1354,6 +1498,22 @@ func (obj *MungeObject) GetPR() (*github.PullRequest, error) {
 	}
 	obj.pr = pr
 	return pr, nil
+}
+
+// UnassignPR removes the passed-in assignees from the github PR's assignees list
+func (obj *MungeObject) UnassignPR(assignees ...string) error {
+	config := obj.config
+	prNum := *obj.Issue.Number
+	config.analytics.UnassignPR.Call(config, nil)
+	glog.Infof("Unassigning %v from PR# %d  to %v", assignees, prNum)
+	if config.DryRun {
+		return nil
+	}
+	if _, _, err := config.client.Issues.RemoveAssignees(config.Org, config.Project, prNum, assignees); err != nil {
+		glog.Errorf("Error unassigning %v from PR# %d  to %v", assignees, prNum)
+		return err
+	}
+	return nil
 }
 
 // AssignPR will assign `prNum` to the `owner` where the `owner` is asignee's github login
@@ -1493,6 +1653,7 @@ func (obj *MungeObject) MergeCommit() *string {
 // including Reviewable footers and extra whitespace.
 func cleanIssueBody(issueBody string) string {
 	issueBody = reviewableFooterRE.ReplaceAllString(issueBody, "")
+	issueBody = htmlCommentRE.ReplaceAllString(issueBody, "")
 	return strings.TrimSpace(issueBody)
 }
 
@@ -1596,6 +1757,7 @@ func (obj *MungeObject) ListReviewComments() ([]*github.PullRequestComment, erro
 	page := 1
 	// Try to work around not finding comments--suspect some cache invalidation bug when the number of pages changes.
 	tryNextPageAnyway := false
+	var lastResponse *github.Response
 	for {
 		listOpts.ListOptions.Page = page
 		glog.V(8).Infof("Fetching page %d of comments for issue %d", page, prNum)
@@ -1613,12 +1775,14 @@ func (obj *MungeObject) ListReviewComments() ([]*github.PullRequestComment, erro
 				break
 			}
 			glog.Infof("For %v: supposedly there weren't more review comments, but we asked anyway and found %v more.", prNum, len(comments))
+			obj.config.deleteCache(lastResponse)
 			tryNextPageAnyway = false
 		}
 		allComments = append(allComments, comments...)
 		if response.LastPage == 0 || response.LastPage <= page {
 			if len(allComments)%100 == 0 {
 				tryNextPageAnyway = true
+				lastResponse = response
 			} else {
 				break
 			}
@@ -1650,6 +1814,7 @@ func (obj *MungeObject) ListComments(withListOpts ...WithListOpt) ([]*github.Iss
 	page := 1
 	// Try to work around not finding comments--suspect some cache invalidation bug when the number of pages changes.
 	tryNextPageAnyway := false
+	var lastResponse *github.Response
 	for {
 		listOpts.ListOptions.Page = page
 		glog.V(8).Infof("Fetching page %d of comments for issue %d", page, issueNum)
@@ -1667,12 +1832,14 @@ func (obj *MungeObject) ListComments(withListOpts ...WithListOpt) ([]*github.Iss
 				break
 			}
 			glog.Infof("For %v: supposedly there weren't more comments, but we asked anyway and found %v more.", issueNum, len(comments))
+			obj.config.deleteCache(lastResponse)
 			tryNextPageAnyway = false
 		}
 		allComments = append(allComments, comments...)
 		if response.LastPage == 0 || response.LastPage <= page {
 			if len(comments)%100 == 0 {
 				tryNextPageAnyway = true
+				lastResponse = response
 			} else {
 				break
 			}

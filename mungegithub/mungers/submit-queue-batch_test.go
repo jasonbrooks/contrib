@@ -53,11 +53,12 @@ func TestGetSuccessfulBatchJobs(t *testing.T) {
 	]`
 	serv := httptest.NewServer(stringHandler(body))
 	defer serv.Close()
-	jobs, err := getSuccessfulBatchJobs("a", serv.URL)
+	jobs, err := getJobs(serv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectEqual(t, "batchJobs", jobs, []prowJob{
+	jobs = jobs.repo("a").batch().successful()
+	expectEqual(t, "batchJobs", jobs, prowJobs{
 		{Type: "batch", Repo: "a", State: "success", Refs: "1", Context: "$"},
 		{Type: "batch", Repo: "a", State: "success", Refs: "2", Context: "!"},
 	})
@@ -91,13 +92,13 @@ func TestGetCompletedBatches(t *testing.T) {
 		RequiredStatusContexts: []string{"st"},
 	}
 	for _, test := range []struct {
-		jobs    []prowJob
+		jobs    prowJobs
 		batches []Batch
 	}{
-		{[]prowJob{}, []Batch{}},
-		{[]prowJob{{Refs: "m:a", Context: "rt"}}, []Batch{}},
-		{[]prowJob{{Refs: "m:a", Context: "st"}}, []Batch{}},
-		{[]prowJob{{Refs: "m:a", Context: "rt"}, {Refs: "m:a", Context: "st"}}, []Batch{{"m", "a", nil}}},
+		{prowJobs{}, []Batch{}},
+		{prowJobs{{Refs: "m:a", Context: "rt"}}, []Batch{}},
+		{prowJobs{{Refs: "m:a", Context: "st"}}, []Batch{}},
+		{prowJobs{{Refs: "m:a", Context: "rt"}, {Refs: "m:a", Context: "st"}}, []Batch{{"m", "a", nil}}},
 	} {
 		expectEqual(t, "getCompletedBatches", sq.getCompleteBatches(test.jobs), test.batches)
 	}
@@ -111,7 +112,10 @@ func TestBatchMatchesCommits(t *testing.T) {
 			refs := s[:i]
 			msg := s[i+1:]
 			split := strings.Split(refs, ":")
-			commit := githubapi.RepositoryCommit{SHA: &split[0], Message: &msg}
+			commit := githubapi.RepositoryCommit{
+				SHA:    &split[0],
+				Commit: &githubapi.Commit{Message: &msg},
+			}
 			for _, parent := range strings.Split(split[1], ",") {
 				p := string(parent) // thanks, Go!
 				commit.Parents = append(commit.Parents, githubapi.Commit{SHA: &p})
