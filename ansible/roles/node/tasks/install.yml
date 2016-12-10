@@ -1,5 +1,8 @@
 ---
 # Install OS specific files
+- include: atomic.yml
+  when: is_atomic
+
 - include: coreos.yml
   when: is_coreos
 

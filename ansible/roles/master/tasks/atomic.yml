@@ -1,0 +1,9 @@
+---
+- name: Place master component service files
+  template: src=atomic/{{ item }} dest=/etc/systemd/system/
+  with_items:
+    - kube-apiserver.service
+    - kube-scheduler.service
+    - kube-controller-manager.service
+  notify:
+    - reload systemd
