@@ -11,8 +11,7 @@ ExecStartPre=-/usr/bin/docker stop %n
 ExecStartPre=-/usr/bin/docker rm %n
 ExecStartPre=/usr/bin/docker pull jasonbrooks/kubernetes-apiserver:f25
 ExecStart=/usr/bin/docker run --rm --net=host -p 443:443 -v /etc/kubernetes:/etc/kubernetes:z --name %n jasonbrooks/kubernetes-apiserver:f25
-ExecStartPost=/usr/bin/sleep 5
-ExecStartPost=/usr/bin/docker cp kube-apiserver.service:/usr/bin/kubectl /usr/local/bin/kubectl
+ExecStartPost=sleep 20 && docker cp kube-apiserver.service:/usr/bin/kubectl /usr/local/bin/kubectl 
 
 [Install]
 WantedBy=multi-user.target
