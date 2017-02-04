@@ -9,8 +9,8 @@ TimeoutStartSec=0
 Restart=always
 ExecStartPre=-/usr/bin/docker stop %n
 ExecStartPre=-/usr/bin/docker rm %n
-ExecStartPre=/usr/bin/docker pull jasonbrooks/kubernetes-apiserver:f25
-ExecStart=/usr/bin/docker run --rm --net=host -p 443:443 -v /etc/kubernetes:/etc/kubernetes:z --name %n jasonbrooks/kubernetes-apiserver:f25
+ExecStartPre=/usr/bin/docker pull {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }}
+ExecStart=/usr/bin/docker run --rm --net=host -p 443:443 -u=kube -v /etc/kubernetes:/etc/kubernetes:z --name %n {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }}
 ExecStartPost=/usr/bin/sleep 5
 ExecStartPost=/usr/bin/docker cp kube-apiserver.service:/usr/bin/kubectl /usr/local/bin/kubectl
 

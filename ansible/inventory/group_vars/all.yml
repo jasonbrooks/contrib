@@ -14,7 +14,7 @@ cluster_name: cluster.local
 # Account name of remote user. Ansible will use this user account to ssh into
 # the managed machines. The user must be able to use sudo without asking
 # for password unless ansible_sudo_pass is set
-#ansible_ssh_user: root
+ansible_ssh_user: root
 
 # password for the ansible_ssh_user. If this is unset you will need to set up
 # ssh keys so a password is not needed.
@@ -77,10 +77,10 @@ flannel_host_prefix: 24
 #contiv_default_gw: 172.16.0.1
 
 # Set to false to disable logging with elasticsearch
-cluster_logging: true
+cluster_logging: false
 
 # Turn to false to disable cluster monitoring with heapster and influxdb
-cluster_monitoring: true
+cluster_monitoring: false
 
 # Turn to false to disable the kube-ui addon for this cluster
 kube_ui: false
@@ -99,3 +99,13 @@ dns_replicas: 1
 
 # See kube documentation for apiserver runtime config options.  Example below enables HPA, deployments features.
 # apiserver_extra_args: "--runtime-config=extensions/v1beta1/deployments=true"
+
+container_registry: docker.io
+container_namespace: jasonbrooks
+container_label: f25
+
+containerized_master: false
+containerized_node: false
+
+etcd_spc: false
+flannel_spc: false

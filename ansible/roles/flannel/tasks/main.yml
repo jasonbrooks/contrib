@@ -22,4 +22,5 @@
   service: name=flanneld state=started
   register: flannel_started
   notify:
+    - reload systemd
     - restart docker
