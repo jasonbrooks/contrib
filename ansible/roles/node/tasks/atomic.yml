@@ -6,3 +6,4 @@
     - kube-proxy.service
   notify:
     - reload systemd
+  when: containerized_node

@@ -59,10 +59,9 @@
   when: etcd_source_type == "package-manager"
 
 - name: install etcd
-  shell: atomic install --system --set ETCD_LISTEN_CLIENT_URLS={{ etcd_listen_client_urls }} --name etcd jasonbrooks/etcd:f25
+  shell: atomic install --system --set ETCD_LISTEN_CLIENT_URLS={{ etcd_listen_client_urls }} --name etcd {{ container_registry }}/{{ container_namespace }}/etcd:{{ container_label }}
   ignore_errors: true
-  when: is_atomic
-
+  when: etcd_spc
 
 - name: Set the etcd_modified fact to true
   set_fact:

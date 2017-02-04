@@ -7,3 +7,4 @@
     - kube-controller-manager.service
   notify:
     - reload systemd
+  when: containerized_master

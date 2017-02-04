@@ -9,8 +9,8 @@ TimeoutStartSec=0
 Restart=always
 ExecStartPre=-/usr/bin/docker stop %n
 ExecStartPre=-/usr/bin/docker rm %n
-ExecStartPre=/usr/bin/docker pull jasonbrooks/kubernetes-proxy:f25
-ExecStart=/usr/bin/docker run --name %n --rm --privileged --net=host -v /etc/kubernetes:/etc/kubernetes:z jasonbrooks/kubernetes-proxy:f25
+ExecStartPre=/usr/bin/docker pull {{ container_registry }}/{{ container_namespace }}/kubernetes-proxy:{{ container_label }}
+ExecStart=/usr/bin/docker run --name %n --rm --privileged --net=host -v /etc/kubernetes:/etc/kubernetes:z {{ container_registry }}/{{ container_namespace }}/kubernetes-proxy:{{ container_label }}
 
 [Install]
 WantedBy=multi-user.target

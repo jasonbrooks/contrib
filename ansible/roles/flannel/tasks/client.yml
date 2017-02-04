@@ -14,9 +14,9 @@
   when: not is_atomic and flannel_source_type != "github-release"
 
 - name: install flannel
-  shell: atomic install --system --set FLANNELD_ETCD_ENDPOINTS={% for node in groups['etcd'] %}http://{{ node }}:2379{% if not loop.last %},{% endif %}{% endfor %} --set FLANNELD_ETCD_PREFIX=/{{ cluster_name }}/network --name flanneld jasonbrooks/flannel:f25
+  shell: atomic install --system --set FLANNELD_ETCD_ENDPOINTS={% for node in groups['etcd'] %}http://{{ node }}:2379{% if not loop.last %},{% endif %}{% endfor %} --set FLANNELD_ETCD_PREFIX=/{{ cluster_name }}/network --name flanneld {{ container_registry }}/{{ container_namespace }}/flannel:{{ container_label }}
+  when: flannel_spc
   ignore_errors: true
-  when: is_atomic
 
 - set_fact: 
     flannel_use_upstart: false
