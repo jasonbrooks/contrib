@@ -111,12 +111,12 @@ dns_replicas: 1
 # See kube documentation for apiserver runtime config options.  Example below enables HPA, deployments features.
 # apiserver_extra_args: "--runtime-config=extensions/v1beta1/deployments=true"
 
-container_registry: docker.io
-container_namespace: jasonbrooks
-container_label: f25
+container_registry: candidate-registry.fedoraproject.org
+container_namespace: f25
+container_label: latest
 
-containerized_master: false
-containerized_node: false
+containerized_master: true
+containerized_node: true
 
-etcd_spc: false
-flannel_spc: false
+etcd_spc: true
+flannel_spc: true
