@@ -3,6 +3,9 @@
 - include: coreos.yml
   when: is_coreos
 
+- include: atomic.yml
+  when: containerized_master
+
 - include: ubuntu-14.04.yml
   when: ansible_distribution == 'Ubuntu' and ansible_distribution_major_version|int < 15
 
