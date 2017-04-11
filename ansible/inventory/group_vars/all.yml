@@ -25,7 +25,7 @@ cluster_name: cluster.local
 # Account name of remote user. Ansible will use this user account to ssh into
 # the managed machines. The user must be able to use sudo without asking
 # for password unless ansible_sudo_pass is set
-#ansible_ssh_user: root
+ansible_ssh_user: root
 
 # password for the ansible_ssh_user. If this is unset you will need to set up
 # ssh keys so a password is not needed.
@@ -124,13 +124,23 @@ kube_cert_keep_ca: false
 #  - --runtime-config=extensions/v1beta1/deployments=true
 
 # To enable etcd auto cert generation set the following *_scheme vars to "https"
-etcd_url_scheme: "https"
-etcd_peer_url_scheme: "https"
+etcd_url_scheme: "http"
+etcd_peer_url_scheme: "http"
 # For etcd client and peer cert authentication set these to true
-etcd_client_cert_auth: true
-etcd_peer_client_cert_auth: true
+etcd_client_cert_auth: false
+etcd_peer_client_cert_auth: false
 
 etcd_client_port: '2379'
 # when the scheme vars above are set to "https" you need to set these to true!
-flannel_etcd_use_certs: true
-apiserver_etcd_use_certs: true
+flannel_etcd_use_certs: false
+apiserver_etcd_use_certs: false
+
+container_registry: docker.io
+container_namespace: jasonbrooks
+container_label: fc25
+
+containerized_master: true
+containerized_node: true
+
+etcd_spc: true
+flannel_spc: true
