@@ -25,6 +25,11 @@
     bin_dir: "/opt/bin"
   when: is_coreos
 
+- name: Set the bin directory path for atomic
+  set_fact:
+    bin_dir: "/usr/local/bin"
+  when: is_atomic
+
 - name: Create the directory used to store binaries
   file: path={{ bin_dir }} state=directory
 
