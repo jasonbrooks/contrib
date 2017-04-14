@@ -28,7 +28,7 @@
 - name: Set the bin directory path for atomic
   set_fact:
     bin_dir: "/usr/local/bin"
-  when: is_atomic
+  when: etcd_spc or containerized_master
 
 - name: Create the directory used to store binaries
   file: path={{ bin_dir }} state=directory
