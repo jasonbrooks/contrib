@@ -1,5 +1,5 @@
 - name: install kube-apiserver
-  shell: atomic install --system --name kube-apiserver {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }} && cp /var/lib/containers/atomic/kube-apiserver/rootfs/usr/bin/kubectl {{ bin_dir }}
+  shell: atomic install --system --name kube-apiserver {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }}
   ignore_errors: true
 
 - name: install kube-controller-manager
