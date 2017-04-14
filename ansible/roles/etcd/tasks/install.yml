@@ -59,7 +59,7 @@
   when: etcd_source_type == "package-manager"
 
 - name: install etcd
-  shell: atomic install --system --name etcd {{ container_registry }}/{{ container_namespace }}/etcd:{{ container_label }} && cp /var/lib/containers/atomic/etcd/rootfs/usr/bin/etcdctl {{ bin_dir }}
+  shell: atomic install --system --name etcd {{ container_registry }}/{{ container_namespace }}/etcd:{{ container_label }}
   ignore_errors: true
   when: etcd_spc
 
