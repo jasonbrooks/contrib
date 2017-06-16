@@ -1,11 +1,11 @@
 - name: install kube-apiserver
-  shell: atomic install --system --name kube-apiserver {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }}
+  shell: atomic install --system --system-package=no --name kube-apiserver {{ container_registry }}/{{ container_namespace }}/kubernetes-apiserver:{{ container_label }}
   ignore_errors: true
 
 - name: install kube-controller-manager
-  shell: atomic install --system --name kube-controller-manager {{ container_registry }}/{{ container_namespace }}/kubernetes-controller-manager:{{ container_label }}
+  shell: atomic install --system --system-package=no --name kube-controller-manager {{ container_registry }}/{{ container_namespace }}/kubernetes-controller-manager:{{ container_label }}
   ignore_errors: true
 
 - name: install kube-scheduler
-  shell: atomic install --system --name kube-scheduler {{ container_registry }}/{{ container_namespace }}/kubernetes-scheduler:{{ container_label }}
+  shell: atomic install --system --system-package=no --name kube-scheduler {{ container_registry }}/{{ container_namespace }}/kubernetes-scheduler:{{ container_label }}
   ignore_errors: true

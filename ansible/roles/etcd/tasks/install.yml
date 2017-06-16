@@ -59,7 +59,7 @@
   when: etcd_source_type == "package-manager"
 
 - name: install etcd
-  shell: atomic install --system --name etcd {{ container_registry }}/{{ container_namespace }}/etcd:{{ container_label }}
+  shell: atomic install --system --system-package=no --name etcd {{ container_registry }}/{{ container_namespace }}/etcd:{{ container_label }}
   ignore_errors: true
   when: etcd_spc
 
