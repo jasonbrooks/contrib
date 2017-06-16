@@ -1,7 +1,7 @@
 - name: install kubelet
-  shell: atomic install --system --name kubelet {{ container_registry }}/{{ container_namespace }}/kubernetes-kubelet:{{ container_label }}
+  shell: atomic install --system --system-package=no --name kubelet {{ container_registry }}/{{ container_namespace }}/kubernetes-kubelet:{{ container_label }}
   ignore_errors: true
 
 - name: install kube-proxy
-  shell: atomic install --system --name kube-proxy {{ container_registry }}/{{ container_namespace }}/kubernetes-proxy:{{ container_label }}
+  shell: atomic install --system --system-package=no --name kube-proxy {{ container_registry }}/{{ container_namespace }}/kubernetes-proxy:{{ container_label }}
   ignore_errors: true

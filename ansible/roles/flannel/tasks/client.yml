@@ -14,7 +14,7 @@
   when: not is_atomic and flannel_source_type != "github-release"
 
 - name: install flannel
-  shell: atomic install --system --name flanneld {{ container_registry }}/{{ container_namespace }}/flannel:{{ container_label }}
+  shell: atomic install --system --system-package=no --name flanneld {{ container_registry }}/{{ container_namespace }}/flannel:{{ container_label }}
   when: flannel_spc
   ignore_errors: true
 
